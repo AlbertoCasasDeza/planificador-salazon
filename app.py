@@ -14,7 +14,7 @@ st.title("🧠 Planificador de Lotes Interactivo y Visual")
 st.sidebar.header("Parámetros de planificación")
 capacidad1 = st.sidebar.number_input("Capacidad máxima (1er intento)", value=3100, step=100)
 capacidad2 = st.sidebar.number_input("Capacidad máxima (2º intento)", value=3500, step=100)
-dias_extra_max = st.sidebar.number_input("Máximo días hábiles extra", value=5, step=1)
+dias_extra_max = st.sidebar.number_input("Máximo días almacenamiento", value=5, step=1)
 
 dias_festivos_default = ["2025-01-01","2025-04-18","2025-05-01","2025-08-15","2025-10-12","2025-11-01","2025-12-25"]
 dias_festivos_list = st.sidebar.multiselect(
@@ -60,60 +60,66 @@ def planificar_filas_na(df_plan):
         unds = row["UNDS"]
         dias_sal_optimos = int(row["DIAS_SAL_OPTIMOS"])
         entrada_valida = False
-        entrada = dia_recepcion
+
+        # Punto de partida: primer día hábil >= DIA (esto NO “consume” nada; el límite lo marca la diferencia natural)
+        entrada_ini = dia_recepcion if es_habil(dia_recepcion) else siguiente_habil(dia_recepcion)
 
         for capacidad in [capacidad1, capacidad2]:
-            dias_extra = 0
-            entrada = dia_recepcion
-            while dias_extra <= dias_extra_max:
-                if not es_habil(entrada):
-                    entrada = siguiente_habil(entrada)
-                    dias_extra += 1
-                    continue
+            entrada = entrada_ini
 
-                if carga_entrada.get(entrada,0)+unds <= capacidad:
+            # ✅ Límite por días naturales: (entrada - DIA).days <= dias_extra_max
+            while (entrada - dia_recepcion).days <= dias_extra_max:
+                # Capacidad en ENTRADA
+                if carga_entrada.get(entrada, 0) + unds <= capacidad:
+                    # Salida ideal
                     salida = entrada + timedelta(days=dias_sal_optimos)
 
+                    # Ajuste por fin de semana (si procede)
                     if ajuste_finde:
-                        if salida.weekday()==5:
-                            salida=anterior_habil(salida)
-                        elif salida.weekday()==6:
-                            salida=siguiente_habil(salida)
+                        if salida.weekday() == 5:
+                            salida = anterior_habil(salida)
+                        elif salida.weekday() == 6:
+                            salida = siguiente_habil(salida)
 
-                    if ajuste_festivos and salida in dias_festivos:
+                    # Ajuste por festivo (si procede)
+                    if ajuste_festivos and (salida in dias_festivos):
                         dia_semana = salida.weekday()
-                        if dia_semana==0:
-                            salida=siguiente_habil(salida)
-                        elif dia_semana in [1,2,3]:
-                            anterior=anterior_habil(salida)
-                            siguiente=siguiente_habil(salida)
-                            carga_ant=carga_salida.get(anterior,0)
-                            carga_sig=carga_salida.get(siguiente,0)
-                            salida=anterior if carga_ant <= carga_sig else siguiente
-                        elif dia_semana==4:
-                            salida=anterior_habil(salida)
+                        if dia_semana == 0:
+                            salida = siguiente_habil(salida)
+                        elif dia_semana in [1, 2, 3]:
+                            anterior = anterior_habil(salida)
+                            siguiente = siguiente_habil(salida)
+                            carga_ant = carga_salida.get(anterior, 0)
+                            carga_sig = carga_salida.get(siguiente, 0)
+                            salida = anterior if carga_ant <= carga_sig else siguiente
+                        elif dia_semana == 4:
+                            salida = anterior_habil(salida)
 
-                    if carga_salida.get(salida,0)+unds <= capacidad:
-                        entrada_valida=True
+                    # Capacidad en SALIDA
+                    if carga_salida.get(salida, 0) + unds <= capacidad:
+                        # Aceptamos
+                        df_corr.at[idx, "ENTRADA_SAL"] = entrada
+                        df_corr.at[idx, "SALIDA_SAL"] = salida
+                        df_corr.at[idx, "DIAS_SAL"] = (salida - entrada).days
+                        df_corr.at[idx, "DIAS_ALMACENADOS"] = (entrada - dia_recepcion).days
+                        df_corr.at[idx, "LOTE_NO_ENCAJA"] = "No"
+                        carga_entrada[entrada] = carga_entrada.get(entrada, 0) + unds
+                        carga_salida[salida] = carga_salida.get(salida, 0) + unds
+                        entrada_valida = True
                         break
 
+                # Próximo día hábil; el tope lo controla la comparación de días naturales
                 entrada = siguiente_habil(entrada)
-                dias_extra += 1
+
             if entrada_valida:
                 break
 
-        if entrada_valida:
-            df_corr.at[idx,"ENTRADA_SAL"]=entrada
-            df_corr.at[idx,"SALIDA_SAL"]=salida
-            df_corr.at[idx,"DIAS_SAL"]=(salida-entrada).days
-            df_corr.at[idx,"DIAS_ALMACENADOS"]=(entrada-dia_recepcion).days
-            df_corr.at[idx,"LOTE_NO_ENCAJA"]="No"
-            carga_entrada[entrada]=carga_entrada.get(entrada,0)+unds
-            carga_salida[salida]=carga_salida.get(salida,0)+unds
-        else:
-            df_corr.at[idx,"LOTE_NO_ENCAJA"]="Sí"
+        # Si no encontró hueco en ninguna pasada
+        if not entrada_valida:
+            df_corr.at[idx, "LOTE_NO_ENCAJA"] = "Sí"
 
-    df_corr["DIFERENCIA_DIAS_SAL"]=df_corr["DIAS_SAL"]-df_corr["DIAS_SAL_OPTIMOS"]
+    # Métrica final
+    df_corr["DIFERENCIA_DIAS_SAL"] = df_corr["DIAS_SAL"] - df_corr["DIAS_SAL_OPTIMOS"]
     return df_corr
 
 def generar_excel(df):
