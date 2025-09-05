@@ -269,8 +269,8 @@ if uploaded_file is not None:
                         showlegend=True
                     ))
 
-                # Etiquetas separadas: UNDS arriba y LOTES justo debajo, centradas sobre cada grupo
-        label_shift = pd.Timedelta(hours=12)  # desplaza x para centrar sobre el grupo (entrada izquierda, salida derecha)
+        # Etiquetas separadas: UNDS arriba y LOTES justo debajo, centradas sobre cada grupo
+        label_shift = pd.Timedelta(hours=8)  # desplaza x para centrar sobre el grupo (entrada izquierda, salida derecha)
 
         if not df_e.empty:
             if "LOTE" in df_e.columns:
@@ -367,5 +367,6 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
