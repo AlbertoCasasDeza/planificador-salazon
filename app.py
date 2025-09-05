@@ -1,4 +1,4 @@
-    # app_planificador_lotes_vfinal_producto.py
+# app.py
 import pandas as pd
 import streamlit as st
 from datetime import timedelta
@@ -197,105 +197,121 @@ if uploaded_file is not None:
             num_rows="dynamic"
         )
 
-        # -------------------------------
-        # Gráfico: Entrada vs Salida lado a lado + apilado por LOTE
-        # -------------------------------
-        st.subheader("📊 Entradas y salidas por fecha con detalle por lote")
+# -------------------------------
+# Gráfico: Entrada vs Salida lado a lado + apilado por LOTE
+# -------------------------------
+st.subheader("📊 Entradas y salidas por fecha con detalle por lote (agrupado + apilado)")
 
-        fig = go.Figure()
+fig = go.Figure()
 
-        # Preparar data limpia (evitar NaT)
-        df_e = df_editable.dropna(subset=["ENTRADA_SAL", "UNDS"])
-        df_s = df_editable.dropna(subset=["SALIDA_SAL", "UNDS"])
+# Preparar data limpia (evitar NaT)
+df_e = df_editable.dropna(subset=["ENTRADA_SAL", "UNDS"])
+df_s = df_editable.dropna(subset=["SALIDA_SAL", "UNDS"])
 
-        # Pivot para apilar por LOTE dentro de cada fecha
-        pivot_e = (
-            df_e.groupby(["ENTRADA_SAL", "LOTE"])["UNDS"]
-                .sum()
-                .unstack(fill_value=0)
-                .sort_index()
-            if {"ENTRADA_SAL", "LOTE", "UNDS"}.issubset(df_e.columns)
-            else pd.DataFrame()
-        )
-        pivot_s = (
-            df_s.groupby(["SALIDA_SAL", "LOTE"])["UNDS"]
-                .sum()
-                .unstack(fill_value=0)
-                .sort_index()
-            if {"SALIDA_SAL", "LOTE", "UNDS"}.issubset(df_s.columns)
-            else pd.DataFrame()
-        )
+# Pivot para apilar por LOTE dentro de cada fecha
+pivot_e = (
+    df_e.groupby(["ENTRADA_SAL", "LOTE"])["UNDS"]
+        .sum()
+        .unstack(fill_value=0)
+        .sort_index()
+    if {"ENTRADA_SAL", "LOTE", "UNDS"}.issubset(df_e.columns)
+    else pd.DataFrame()
+)
+pivot_s = (
+    df_s.groupby(["SALIDA_SAL", "LOTE"])["UNDS"]
+        .sum()
+        .unstack(fill_value=0)
+        .sort_index()
+    if {"SALIDA_SAL", "LOTE", "UNDS"}.issubset(df_s.columns)
+    else pd.DataFrame()
+)
 
-        # Añadir traces de ENTRADA (azules), apilados por LOTE, en offsetgroup "entrada"
-        if not pivot_e.empty:
-            for lote in pivot_e.columns:
-                y_vals = pivot_e[lote]
-                if (y_vals > 0).any():
-                    fig.add_trace(go.Bar(
-                        x=pivot_e.index,
-                        y=y_vals,
-                        name=f"{lote} (Entrada)",
-                        offsetgroup="entrada",
-                        legendgroup="entrada",
-                        marker_color="blue",
-                        marker_line_color="white",
-                        marker_line_width=1.2,
-                        hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
-                        showlegend=True
-                    ))
-
-        # Añadir traces de SALIDA (naranjas), apilados por LOTE, en offsetgroup "salida"
-        if not pivot_s.empty:
-            for lote in pivot_s.columns:
-                y_vals = pivot_s[lote]
-                if (y_vals > 0).any():
-                    fig.add_trace(go.Bar(
-                        x=pivot_s.index,
-                        y=y_vals,
-                        name=f"{lote} (Salida)",
-                        offsetgroup="salida",
-                        legendgroup="salida",
-                        marker_color="orange",
-                        marker_line_color="white",
-                        marker_line_width=1.2,
-                        hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
-                        showlegend=True
-                    ))
-
-        # Etiquetas de totales por fecha (una por pila)
-        tot_e = pivot_e.sum(axis=1) if not pivot_e.empty else pd.Series(dtype=float)
-        tot_s = pivot_s.sum(axis=1) if not pivot_s.empty else pd.Series(dtype=float)
-
-        for x, y in tot_e.items():
-            fig.add_trace(go.Scatter(
-                x=[x], y=[y],
-                text=[int(y)],
-                mode="text",
-                textposition="top center",
-                showlegend=False
+# Añadir traces de ENTRADA (azules), apilados por LOTE, en offsetgroup "entrada"
+if not pivot_e.empty:
+    for lote in pivot_e.columns:
+        y_vals = pivot_e[lote]
+        if (y_vals > 0).any():
+            fig.add_trace(go.Bar(
+                x=pivot_e.index,
+                y=y_vals,
+                name=f"{lote} (Entrada)",
+                offsetgroup="entrada",
+                legendgroup="entrada",
+                marker_color="blue",
+                marker_line_color="white",
+                marker_line_width=1.2,
+                hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
+                showlegend=True
             ))
 
-        for x, y in tot_s.items():
-            fig.add_trace(go.Scatter(
-                x=[x], y=[y],
-                text=[int(y)],
-                mode="text",
-                textposition="top center",
-                showlegend=False
+# Añadir traces de SALIDA (naranjas), apilados por LOTE, en offsetgroup "salida"
+if not pivot_s.empty:
+    for lote in pivot_s.columns:
+        y_vals = pivot_s[lote]
+        if (y_vals > 0).any():
+            fig.add_trace(go.Bar(
+                x=pivot_s.index,
+                y=y_vals,
+                name=f"{lote} (Salida)",
+                offsetgroup="salida",
+                legendgroup="salida",
+                marker_color="orange",
+                marker_line_color="white",
+                marker_line_width=1.2,
+                hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
+                showlegend=True
             ))
 
-        # Eje X: todas las fechas presentes en entradas o salidas
-        ticks = pd.Index(sorted(set(tot_e.index.tolist()) | set(tot_s.index.tolist())))
-        fig.update_layout(
-            barmode="relative",  # apila por lote dentro de cada offsetgroup
-            xaxis_title="Fecha",
-            yaxis_title="Unidades",
-            xaxis=dict(tickmode="array", tickvals=ticks, tickformat="%A, %-d %b"),
-            bargap=0.25,
-            bargroupgap=0.10,
-        )
+# Etiquetas de totales por fecha (UNDS + nº lotes)
+if not df_e.empty:
+    if "LOTE" in df_e.columns:
+        tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
+    else:
+        tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
+    for _, row in tot_e.iterrows():
+        fig.add_trace(go.Scatter(
+            x=[row["ENTRADA_SAL"]],
+            y=[row["UNDS"]],
+            text=[f"{int(row['UNDS'])} unds\n{int(row['LOTES'])} lotes"],
+            mode="text",
+            textposition="top center",
+            showlegend=False
+        ))
 
-        st.plotly_chart(fig, use_container_width=True)
+if not df_s.empty:
+    if "LOTE" in df_s.columns:
+        tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
+    else:
+        tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
+    for _, row in tot_s.iterrows():
+        fig.add_trace(go.Scatter(
+            x=[row["SALIDA_SAL"]],
+            y=[row["UNDS"]],
+            text=[f"{int(row['UNDS'])} unds\n{int(row['LOTES'])} lotes"],
+            mode="text",
+            textposition="top center",
+            showlegend=False
+        ))
+
+# Eje X: todas las fechas presentes en entradas o salidas
+ticks = pd.Index(sorted(set(
+    (pivot_e.index.tolist() if not pivot_e.empty else []) +
+    (pivot_s.index.tolist() if not pivot_s.empty else [])
+)))
+fig.update_layout(
+    barmode="relative",  # apila por lote dentro de cada offsetgroup
+    xaxis_title="Fecha",
+    yaxis_title="Unidades",
+    xaxis=dict(
+        tickmode="array",
+        tickvals=ticks,
+        tickformat="%A, %-d %b"  # en inglés, como decidiste
+    ),
+    bargap=0.25,
+    bargroupgap=0.10
+)
+
+st.plotly_chart(fig, use_container_width=True)
 
         # -------------------------------
         # Botón para descargar Excel
@@ -307,7 +323,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
-
-
