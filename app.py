@@ -269,73 +269,77 @@ if uploaded_file is not None:
                         showlegend=True
                     ))
 
-        # Etiquetas separadas: UNDS arriba y LOTES justo debajo, centradas sobre cada grupo
-        label_shift = pd.Timedelta(hours=8)  # desplaza x para centrar sobre el grupo (entrada izquierda, salida derecha)
+        # Etiquetas separadas con ANOTACIONES (en píxeles): UNDS arriba y LOTES debajo,
+        # centradas por grupo (Entrada izquierda, Salida derecha) y siempre fuera de la barra.
+        label_shift = pd.Timedelta(hours=8)  # desplaza x para centrar sobre el grupo
+        annotations = []
+
+        # Totales Entrada/Salida para calcular headroom del eje Y
+        tot_e = pd.DataFrame()
+        tot_s = pd.DataFrame()
 
         if not df_e.empty:
             if "LOTE" in df_e.columns:
-                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
+                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"),
+                                                        LOTES=("LOTE", "nunique")).reset_index()
             else:
-                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
-
-            for _, row in tot_e.iterrows():
-                x_e = row["ENTRADA_SAL"] - label_shift
-                y_e = row["UNDS"]
-                # UNDS (arriba, fuera de la barra)
-                fig.add_trace(go.Scatter(
-                    x=[x_e],
-                    y=[y_e * 1.06],
-                    text=[f"{int(row['UNDS'])}"],
-                    mode="text",
-                    textposition="middle center",
-                    textfont=dict(size=12, color="black"),
-                    cliponaxis=False,
-                    showlegend=False
-                ))
-                # LOTES (debajo de UNDS, aún fuera de la barra)
-                fig.add_trace(go.Scatter(
-                    x=[x_e],
-                    y=[y_e * 1.03],
-                    text=[f"{int(row['LOTES'])} lotes"],
-                    mode="text",
-                    textposition="middle center",
-                    textfont=dict(size=10, color="gray"),
-                    cliponaxis=False,
-                    showlegend=False
-                ))
+                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"),
+                                                        LOTES=("UNDS", "size")).reset_index()
 
         if not df_s.empty:
             if "LOTE" in df_s.columns:
-                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
+                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"),
+                                                       LOTES=("LOTE", "nunique")).reset_index()
             else:
-                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
+                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"),
+                                                       LOTES=("UNDS", "size")).reset_index()
 
-            for _, row in tot_s.iterrows():
-                x_s = row["SALIDA_SAL"] + label_shift
-                y_s = row["UNDS"]
-                # UNDS (arriba, fuera de la barra)
-                fig.add_trace(go.Scatter(
-                    x=[x_s],
-                    y=[y_s * 1.10],
-                    text=[f"{int(row['UNDS'])}"],
-                    mode="text",
-                    textposition="middle center",
-                    textfont=dict(size=12, color="black"),
-                    cliponaxis=False,
-                    showlegend=False
-                ))
-                # LOTES (debajo de UNDS, aún fuera de la barra)
-                fig.add_trace(go.Scatter(
-                    x=[x_s],
-                    y=[y_s * 1.06],
-                    text=[f"{int(row['LOTES'])} lotes"],
-                    mode="text",
-                    textposition="middle center",
-                    textfont=dict(size=10, color="gray"),
-                    cliponaxis=False,
-                    showlegend=False
-                ))
+        # Headroom vertical para que las etiquetas nunca se corten ni pisen la barra
+        max_e = int(tot_e["UNDS"].max()) if not tot_e.empty else 0
+        max_s = int(tot_s["UNDS"].max()) if not tot_s.empty else 0
+        max_y = max(max_e, max_s)
+        if max_y == 0:
+            max_y = 1  # evita rango [0,0]
 
+        # Helper para añadir 2 anotaciones por barra (UNDS y LOTES)
+        def add_two_labels(x_dt, y_val, lots_count, is_entry=True):
+            # x pos desplazado a izquierda (entrada) o derecha (salida)
+            x_pos = x_dt - label_shift if is_entry else x_dt + label_shift
+            # base mínima para que no quede pegado al eje
+            y_base = max(y_val, max_y * 0.02)
+
+            # UNDS (arriba del todo, 28 px sobre la cima de la barra)
+            annotations.append(dict(
+                x=x_pos, y=y_base, xref="x", yref="y",
+                text=f"<b>{int(y_val)}</b>",
+                showarrow=False,
+                yshift=28,  # píxeles
+                align="center",
+                font=dict(size=13, color="black")
+            ))
+            # LOTES (un poco por debajo de UNDS, también fuera de la barra)
+            annotations.append(dict(
+                x=x_pos, y=y_base, xref="x", yref="y",
+                text=f"{int(lots_count)} lotes",
+                showarrow=False,
+                yshift=12,  # píxeles
+                align="center",
+                font=dict(size=11, color="gray")
+            ))
+
+        # Añadir anotaciones para ENTRADA (izquierda)
+        if not tot_e.empty:
+            for _, r in tot_e.iterrows():
+                add_two_labels(r["ENTRADA_SAL"], r["UNDS"], r["LOTES"], is_entry=True)
+
+        # Añadir anotaciones para SALIDA (derecha)
+        if not tot_s.empty:
+            for _, r in tot_s.iterrows():
+                add_two_labels(r["SALIDA_SAL"], r["UNDS"], r["LOTES"], is_entry=False)
+
+        # Aplicar anotaciones y dar aire arriba
+        fig.update_layout(annotations=annotations)
+        fig.update_yaxes(range=[0, max_y * 1.25])  # 25% de aire por encima de la barra más alta
 
         # Eje X: todas las fechas presentes en entradas o salidas
         ticks = pd.Index(sorted(set(
@@ -367,6 +371,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
