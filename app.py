@@ -313,13 +313,14 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-        # -------------------------------
-        # Botón para descargar Excel
-        # -------------------------------
-        excel_bytes = generar_excel(df_editable)  # usa la función definida arriba
-        st.download_button(
-            label="💾 Descargar Excel con planificación",
-            data=excel_bytes,
-            file_name="planificacion_lotes.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+# -------------------------------
+# Botón para descargar Excel
+# -------------------------------
+excel_bytes = generar_excel(df_editable)  # usa la función definida arriba
+st.download_button(
+    label="💾 Descargar Excel con planificación",
+    data=excel_bytes,
+    file_name="planificacion_lotes.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
