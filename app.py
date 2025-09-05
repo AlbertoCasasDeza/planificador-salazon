@@ -315,7 +315,7 @@ if uploaded_file is not None:
                 showarrow=False,
                 yshift=28,  # píxeles
                 align="center",
-                font=dict(size=13, color="black")
+                font=dict(size=9, color="black")
             ))
             # LOTES (un poco por debajo de UNDS, también fuera de la barra)
             annotations.append(dict(
@@ -324,7 +324,7 @@ if uploaded_file is not None:
                 showarrow=False,
                 yshift=12,  # píxeles
                 align="center",
-                font=dict(size=11, color="black")
+                font=dict(size=9, color="black")
             ))
 
         # Añadir anotaciones para ENTRADA (izquierda)
@@ -371,6 +371,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
