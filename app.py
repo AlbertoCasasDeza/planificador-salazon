@@ -324,7 +324,7 @@ if uploaded_file is not None:
                 showarrow=False,
                 yshift=12,  # píxeles
                 align="center",
-                font=dict(size=11, color="gray")
+                font=dict(size=11, color="black")
             ))
 
         # Añadir anotaciones para ENTRADA (izquierda)
@@ -371,6 +371,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
