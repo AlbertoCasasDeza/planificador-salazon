@@ -316,7 +316,7 @@ if uploaded_file is not None:
                 # UNDS (arriba, fuera de la barra)
                 fig.add_trace(go.Scatter(
                     x=[x_s],
-                    y=[y_s * 1.06],
+                    y=[y_s * 1.10],
                     text=[f"{int(row['UNDS'])}"],
                     mode="text",
                     textposition="middle center",
@@ -327,7 +327,7 @@ if uploaded_file is not None:
                 # LOTES (debajo de UNDS, aún fuera de la barra)
                 fig.add_trace(go.Scatter(
                     x=[x_s],
-                    y=[y_s * 1.03],
+                    y=[y_s * 1.06],
                     text=[f"{int(row['LOTES'])} lotes"],
                     mode="text",
                     textposition="middle center",
@@ -367,6 +367,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
