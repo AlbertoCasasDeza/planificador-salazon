@@ -200,7 +200,7 @@ if uploaded_file is not None:
         # -------------------------------
         # Gráfico: Entrada vs Salida lado a lado + apilado por LOTE
         # -------------------------------
-        st.subheader("📊 Entradas y salidas por fecha con detalle por lote (agrupado + apilado)")
+        st.subheader("📊 Entradas y salidas por fecha con detalle por lote")
 
         fig = go.Figure()
 
@@ -290,7 +290,7 @@ if uploaded_file is not None:
             barmode="relative",  # apila por lote dentro de cada offsetgroup
             xaxis_title="Fecha",
             yaxis_title="Unidades",
-            xaxis=dict(tickmode="array", tickvals=ticks),
+            xaxis=dict(tickmode="array", tickvals=ticks, tickformat="%A, %-d %b"),
             bargap=0.25,
             bargroupgap=0.10
         )
@@ -307,3 +307,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
