@@ -269,31 +269,38 @@ if uploaded_file is not None:
                         showlegend=True
                     ))
 
-        # Etiquetas separadas: UNDS arriba, LOTES un poquito por debajo
+                # Etiquetas separadas: UNDS arriba y LOTES justo debajo, centradas sobre cada grupo
+        label_shift = pd.Timedelta(hours=12)  # desplaza x para centrar sobre el grupo (entrada izquierda, salida derecha)
+
         if not df_e.empty:
             if "LOTE" in df_e.columns:
                 tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
             else:
                 tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
+
             for _, row in tot_e.iterrows():
-                # UNDS arriba (en la cima)
+                x_e = row["ENTRADA_SAL"] - label_shift
+                y_e = row["UNDS"]
+                # UNDS (arriba, fuera de la barra)
                 fig.add_trace(go.Scatter(
-                    x=[row["ENTRADA_SAL"]],
-                    y=[row["UNDS"]],
+                    x=[x_e],
+                    y=[y_e * 1.06],
                     text=[f"{int(row['UNDS'])}"],
                     mode="text",
-                    textposition="top center",
+                    textposition="middle center",
                     textfont=dict(size=12, color="black"),
+                    cliponaxis=False,
                     showlegend=False
                 ))
-                # LOTES justo debajo
+                # LOTES (debajo de UNDS, aún fuera de la barra)
                 fig.add_trace(go.Scatter(
-                    x=[row["ENTRADA_SAL"]],
-                    y=[row["UNDS"] * 0.98],  # pequeño offset hacia abajo
+                    x=[x_e],
+                    y=[y_e * 1.03],
                     text=[f"{int(row['LOTES'])} lotes"],
                     mode="text",
-                    textposition="top center",
+                    textposition="middle center",
                     textfont=dict(size=10, color="gray"),
+                    cliponaxis=False,
                     showlegend=False
                 ))
 
@@ -302,27 +309,33 @@ if uploaded_file is not None:
                 tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
             else:
                 tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
+
             for _, row in tot_s.iterrows():
-                # UNDS arriba
+                x_s = row["SALIDA_SAL"] + label_shift
+                y_s = row["UNDS"]
+                # UNDS (arriba, fuera de la barra)
                 fig.add_trace(go.Scatter(
-                    x=[row["SALIDA_SAL"]],
-                    y=[row["UNDS"]],
+                    x=[x_s],
+                    y=[y_s * 1.06],
                     text=[f"{int(row['UNDS'])}"],
                     mode="text",
-                    textposition="top center",
+                    textposition="middle center",
                     textfont=dict(size=12, color="black"),
+                    cliponaxis=False,
                     showlegend=False
                 ))
-                # LOTES debajo
+                # LOTES (debajo de UNDS, aún fuera de la barra)
                 fig.add_trace(go.Scatter(
-                    x=[row["SALIDA_SAL"]],
-                    y=[row["UNDS"] * 0.98],
+                    x=[x_s],
+                    y=[y_s * 1.03],
                     text=[f"{int(row['LOTES'])} lotes"],
                     mode="text",
-                    textposition="top center",
+                    textposition="middle center",
                     textfont=dict(size=10, color="gray"),
+                    cliponaxis=False,
                     showlegend=False
                 ))
+
 
         # Eje X: todas las fechas presentes en entradas o salidas
         ticks = pd.Index(sorted(set(
@@ -354,4 +367,5 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
