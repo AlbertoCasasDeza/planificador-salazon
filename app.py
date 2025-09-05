@@ -292,7 +292,7 @@ if uploaded_file is not None:
             yaxis_title="Unidades",
             xaxis=dict(tickmode="array", tickvals=ticks, tickformat="%A, %-d %b"),
             bargap=0.25,
-            bargroupgap=0.10
+            bargroupgap=0.10,
             locale="es"  # 👈 fuerza el idioma a español
         )
 
@@ -308,5 +308,6 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
