@@ -114,11 +114,11 @@ def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto)
                     # Capacidad SALIDA
                     if carga_salida.get(salida, 0) + unds <= capacidad:
                         # Aceptamos
-                        df_corr.at[idx, "ENTRADA_SAL"]     = entrada
-                        df_corr.at[idx, "SALIDA_SAL"]      = salida
-                        df_corr.at[idx, "DIAS_SAL"]        = (salida - entrada).days
-                        df_corr.at[idx, "DIAS_ALMACENADOS"]= (entrada - dia_recepcion).days
-                        df_corr.at[idx, "LOTE_NO_ENCAJA"]  = "No"
+                        df_corr.at[idx, "ENTRADA_SAL"]      = entrada
+                        df_corr.at[idx, "SALIDA_SAL"]       = salida
+                        df_corr.at[idx, "DIAS_SAL"]         = (salida - entrada).days
+                        df_corr.at[idx, "DIAS_ALMACENADOS"] = (entrada - dia_recepcion).days
+                        df_corr.at[idx, "LOTE_NO_ENCAJA"]   = "No"
                         carga_entrada[entrada] = carga_entrada.get(entrada, 0) + unds
                         carga_salida[salida]   = carga_salida.get(salida, 0)   + unds
                         entrada_valida = True
@@ -207,7 +207,7 @@ if uploaded_file is not None:
         # -------------------------------
         # Gráfico: Entrada vs Salida lado a lado + apilado por LOTE
         # -------------------------------
-        st.subheader("📊 Entradas y salidas por fecha con detalle por lote")
+        st.subheader("📊 Entradas y salidas por fecha con detalle por lote (agrupado + apilado)")
 
         fig = go.Figure()
 
@@ -269,19 +269,31 @@ if uploaded_file is not None:
                         showlegend=True
                     ))
 
-        # Etiquetas de totales por fecha (UNDS + nº lotes)
+        # Etiquetas separadas: UNDS arriba, LOTES un poquito por debajo
         if not df_e.empty:
             if "LOTE" in df_e.columns:
                 tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("LOTE", "nunique")).reset_index()
             else:
                 tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
             for _, row in tot_e.iterrows():
+                # UNDS arriba (en la cima)
                 fig.add_trace(go.Scatter(
                     x=[row["ENTRADA_SAL"]],
                     y=[row["UNDS"]],
-                    text=[f"{int(row['UNDS'])} unds\n{int(row['LOTES'])} lotes"],
+                    text=[f"{int(row['UNDS'])}"],
                     mode="text",
                     textposition="top center",
+                    textfont=dict(size=12, color="black"),
+                    showlegend=False
+                ))
+                # LOTES justo debajo
+                fig.add_trace(go.Scatter(
+                    x=[row["ENTRADA_SAL"]],
+                    y=[row["UNDS"] * 0.98],  # pequeño offset hacia abajo
+                    text=[f"{int(row['LOTES'])} lotes"],
+                    mode="text",
+                    textposition="top center",
+                    textfont=dict(size=10, color="gray"),
                     showlegend=False
                 ))
 
@@ -291,12 +303,24 @@ if uploaded_file is not None:
             else:
                 tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"), LOTES=("UNDS", "size")).reset_index()
             for _, row in tot_s.iterrows():
+                # UNDS arriba
                 fig.add_trace(go.Scatter(
                     x=[row["SALIDA_SAL"]],
                     y=[row["UNDS"]],
-                    text=[f"{int(row['UNDS'])} unds\n{int(row['LOTES'])} lotes"],
+                    text=[f"{int(row['UNDS'])}"],
                     mode="text",
                     textposition="top center",
+                    textfont=dict(size=12, color="black"),
+                    showlegend=False
+                ))
+                # LOTES debajo
+                fig.add_trace(go.Scatter(
+                    x=[row["SALIDA_SAL"]],
+                    y=[row["UNDS"] * 0.98],
+                    text=[f"{int(row['LOTES'])} lotes"],
+                    mode="text",
+                    textposition="top center",
+                    textfont=dict(size=10, color="gray"),
                     showlegend=False
                 ))
 
@@ -312,7 +336,7 @@ if uploaded_file is not None:
             xaxis=dict(
                 tickmode="array",
                 tickvals=ticks,
-                tickformat="%A, %-d %b"  # Inglés, como acordamos (e.g., Monday, 8 Sep)
+                tickformat="%A, %-d %b"  # Inglés: Monday, 8 Sep
             ),
             bargap=0.25,
             bargroupgap=0.10
