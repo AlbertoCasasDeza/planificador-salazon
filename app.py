@@ -5,8 +5,8 @@ from datetime import timedelta
 import plotly.graph_objects as go
 from io import BytesIO
 
-st.set_page_config(page_title="Planificador Lotes Visual", layout="wide")
-st.title("🧠 Planificador de Lotes Interactivo y Visual")
+st.set_page_config(page_title="Planificador Lotes Naturiber", layout="wide")
+st.title("🧠 Planificador de Lotes Salazón Naturiber")
 
 # -------------------------------
 # Panel de configuración (globales)
@@ -26,8 +26,8 @@ dias_festivos_list = st.sidebar.multiselect(
 )
 dias_festivos = pd.to_datetime(dias_festivos_list)
 
-ajuste_finde = st.sidebar.checkbox("Ajustar fines de semana (SALIDA)", value=True)
-ajuste_festivos = st.sidebar.checkbox("Ajustar festivos (SALIDA)", value=True)
+ajuste_finde = st.sidebar.checkbox("Ajustar fines de semana", value=True)
+ajuste_festivos = st.sidebar.checkbox("Ajustar festivos", value=True)
 
 # -------------------------------
 # Subir archivo Excel
@@ -295,3 +295,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
