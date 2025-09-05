@@ -197,87 +197,99 @@ if uploaded_file is not None:
             num_rows="dynamic"
         )
 
-        # -------------------------------
-        # Gráfico (lado a lado, detalle por lote)
-        # -------------------------------
-        st.subheader("📊 Entradas y salidas por fecha con detalle por lote")
+# -------------------------------
+# Gráfico: Entrada vs Salida lado a lado + apilado por LOTE
+# -------------------------------
+st.subheader("📊 Entradas y salidas por fecha con detalle por lote (agrupado + apilado)")
 
-        fig = go.Figure()
+fig = go.Figure()
 
-        # Entradas (azul)
-        if "LOTE" in df_editable.columns:
-            for lote, df_lote in df_editable.groupby("LOTE"):
-                fig.add_trace(go.Bar(
-                    x=df_lote["ENTRADA_SAL"],
-                    y=df_lote["UNDS"],
-                    name=f"Lote {lote} (Entrada)",
-                    offsetgroup="entrada",
-                    marker_color="blue",
-                    showlegend=True
-                ))
-        else:
-            fig.add_trace(go.Bar(
-                x=df_editable["ENTRADA_SAL"],
-                y=df_editable["UNDS"],
-                name="Entrada",
-                offsetgroup="entrada",
-                marker_color="blue",
-                showlegend=True
-            ))
+# Preparar data limpia
+df_e = df_editable.dropna(subset=["ENTRADA_SAL", "UNDS"])
+df_s = df_editable.dropna(subset=["SALIDA_SAL", "UNDS"])
 
-        # Salidas (naranja)
-        if "LOTE" in df_editable.columns:
-            for lote, df_lote in df_editable.groupby("LOTE"):
-                fig.add_trace(go.Bar(
-                    x=df_lote["SALIDA_SAL"],
-                    y=df_lote["UNDS"],
-                    name=f"Lote {lote} (Salida)",
-                    offsetgroup="salida",
-                    marker_color="orange",
-                    showlegend=True
-                ))
-        else:
-            fig.add_trace(go.Bar(
-                x=df_editable["SALIDA_SAL"],
-                y=df_editable["UNDS"],
-                name="Salida",
-                offsetgroup="salida",
-                marker_color="orange",
-                showlegend=True
-            ))
+# Pivot para apilar por LOTE dentro de cada fecha
+pivot_e = (
+    df_e.groupby(["ENTRADA_SAL", "LOTE"])["UNDS"]
+        .sum()
+        .unstack(fill_value=0)
+        .sort_index()
+)
+pivot_s = (
+    df_s.groupby(["SALIDA_SAL", "LOTE"])["UNDS"]
+        .sum()
+        .unstack(fill_value=0)
+        .sort_index()
+)
 
-        fig.update_layout(
-            barmode="group",  # lado a lado
-            xaxis_title="Fecha",
-            yaxis_title="Unidades",
-            xaxis=dict(tickmode="linear"),
-            bargap=0.2,
-            bargroupgap=0.05
-        )
+# Añadir traces de ENTRADA (azules), apilados por LOTE, en offsetgroup "entrada"
+for lote in pivot_e.columns:
+    y_vals = pivot_e[lote]
+    if (y_vals > 0).any():
+        fig.add_trace(go.Bar(
+            x=pivot_e.index,
+            y=y_vals,
+            name=f"{lote} (Entrada)" if "LOTE" in df_editable.columns else "Entrada",
+            offsetgroup="entrada",
+            legendgroup="entrada",
+            marker_color="blue",
+            marker_line_color="white",
+            marker_line_width=1.2,
+            hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
+            showlegend=True  # si molesta mucho, podemos mostrar solo el 1º por grupo
+        ))
 
-        # Etiquetas totales por día (Entrada y Salida)
-        totales_entrada = df_editable.groupby("ENTRADA_SAL")["UNDS"].sum().reset_index()
-        for _, row in totales_entrada.iterrows():
-            fig.add_trace(go.Scatter(
-                x=[row["ENTRADA_SAL"]],
-                y=[row["UNDS"]],
-                text=[row["UNDS"]],
-                textposition="top center",
-                mode="text",
-                showlegend=False
-            ))
-        totales_salida = df_editable.groupby("SALIDA_SAL")["UNDS"].sum().reset_index()
-        for _, row in totales_salida.iterrows():
-            fig.add_trace(go.Scatter(
-                x=[row["SALIDA_SAL"]],
-                y=[row["UNDS"]],
-                text=[row["UNDS"]],
-                textposition="top center",
-                mode="text",
-                showlegend=False
-            ))
+# Añadir traces de SALIDA (naranjas), apilados por LOTE, en offsetgroup "salida"
+for lote in pivot_s.columns:
+    y_vals = pivot_s[lote]
+    if (y_vals > 0).any():
+        fig.add_trace(go.Bar(
+            x=pivot_s.index,
+            y=y_vals,
+            name=f"{lote} (Salida)" if "LOTE" in df_editable.columns else "Salida",
+            offsetgroup="salida",
+            legendgroup="salida",
+            marker_color="orange",
+            marker_line_color="white",
+            marker_line_width=1.2,
+            hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
+            showlegend=True
+        ))
 
-        st.plotly_chart(fig, use_container_width=True)
+# Etiquetas de totales por fecha (una por pila)
+tot_e = pivot_e.sum(axis=1) if not pivot_e.empty else pd.Series(dtype=float)
+tot_s = pivot_s.sum(axis=1) if not pivot_s.empty else pd.Series(dtype=float)
+
+for x, y in tot_e.items():
+    fig.add_trace(go.Scatter(
+        x=[x], y=[y],
+        text=[int(y)],
+        mode="text",
+        textposition="top center",
+        showlegend=False
+    ))
+
+for x, y in tot_s.items():
+    fig.add_trace(go.Scatter(
+        x=[x], y=[y],
+        text=[int(y)],
+        mode="text",
+        textposition="top center",
+        showlegend=False
+    ))
+
+# Eje X: todas las fechas presentes en entradas o salidas
+ticks = pd.Index(sorted(set(tot_e.index.tolist()) | set(tot_s.index.tolist())))
+fig.update_layout(
+    barmode="relative",  # << apila por lote dentro de cada offsetgroup
+    xaxis_title="Fecha",
+    yaxis_title="Unidades",
+    xaxis=dict(tickmode="array", tickvals=ticks),
+    bargap=0.25,
+    bargroupgap=0.10
+)
+
+st.plotly_chart(fig, use_container_width=True)
 
         # -------------------------------
         # Botón para descargar Excel
