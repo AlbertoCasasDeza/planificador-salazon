@@ -356,7 +356,7 @@ if uploaded_file is not None:
                 tickformat="%A, %-d %b"  # Inglés: Monday, 8 Sep
             ),
             bargap=0.25,
-            bargroupgap=0.10
+            bargroupgap=0.40
         )
 
         st.plotly_chart(fig, use_container_width=True)
@@ -371,6 +371,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
