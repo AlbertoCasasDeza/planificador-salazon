@@ -24,8 +24,8 @@ capacidad2 = st.sidebar.number_input("Capacidad máxima (2º intento)", value=35
 dias_max_almacen_global = st.sidebar.number_input("Días máx. almacenamiento (GLOBAL)", value=5, step=1)
 
 dias_festivos_default = [
-    "2025-01-01","2025-04-18","2025-05-01","2025-08-15",
-    "2025-10-12","2025-11-01","2025-12-25"
+    "2025-01-01", "2025-04-18", "2025-05-01", "2025-08-15",
+    "2025-10-12", "2025-11-01", "2025-12-25"
 ]
 dias_festivos_list = st.sidebar.multiselect(
     "Selecciona los días festivos",
@@ -36,6 +36,11 @@ dias_festivos = pd.to_datetime(dias_festivos_list)
 
 ajuste_finde = st.sidebar.checkbox("Ajustar fines de semana (SALIDA)", value=True)
 ajuste_festivos = st.sidebar.checkbox("Ajustar festivos (SALIDA)", value=True)
+
+# Botón opcional para limpiar estado si algo “se queda pillado”
+if st.sidebar.button("🔄 Reiniciar sesión"):
+    st.session_state.clear()
+    st.rerun()
 
 # -------------------------------
 # Subir archivo Excel
@@ -66,7 +71,8 @@ def _sumar_en_rango(dic, fecha_ini, fecha_fin_inclusive, unds):
     if pd.isna(fecha_ini) or pd.isna(fecha_fin_inclusive):
         return
     for d in pd.date_range(fecha_ini, fecha_fin_inclusive, freq="D"):
-        dic[d] = dic.get(d, 0) + unds
+        d0 = d.normalize()
+        dic[d0] = dic.get(d0, 0) + unds
 
 def _cabe_en_estab(dic, fecha_ini, fecha_fin_inclusive, unds, cap):
     """Comprueba si al sumar 'unds' en cada fecha del rango se respetaría 'cap'."""
@@ -75,12 +81,59 @@ def _cabe_en_estab(dic, fecha_ini, fecha_fin_inclusive, unds, cap):
     if fecha_fin_inclusive < fecha_ini:
         return True  # entra el mismo día -> no ocupa estabilización
     for d in pd.date_range(fecha_ini, fecha_fin_inclusive, freq="D"):
-        if dic.get(d, 0) + unds > cap:
+        d0 = d.normalize()
+        if dic.get(d0, 0) + unds > cap:
             return False
     return True
 
+def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFrame:
+    """
+    Devuelve un dataframe con la ocupación diaria de la cámara de estabilización.
+    Para cada lote, si ENTRADA_SAL > DIA, suma UNDS en todos los días [DIA, ENTRADA_SAL - 1].
+    """
+    carga = {}
+
+    for _, r in df_plan.iterrows():
+        dia = r.get("DIA")
+        entrada = r.get("ENTRADA_SAL")
+        unds = int(r.get("UNDS", 0) or 0)
+
+        if pd.isna(dia) or pd.isna(entrada) or unds <= 0:
+            continue
+
+        fin = entrada - pd.Timedelta(days=1)
+        if fin.date() < dia.date():
+            continue
+
+        for d in pd.date_range(dia.normalize(), fin.normalize(), freq="D"):
+            d0 = d.normalize()
+            carga[d0] = carga.get(d0, 0) + unds
+
+    if not carga:
+        return pd.DataFrame(columns=["FECHA", "ESTAB_UNDS", "CAPACIDAD", "UTIL_%", "EXCESO", "AL_DIA_SIGUIENTE"])
+
+    df_estab = (
+        pd.Series(carga, name="ESTAB_UNDS")
+        .sort_index()
+        .to_frame()
+        .reset_index()
+        .rename(columns={"index": "FECHA"})
+    )
+    df_estab["CAPACIDAD"] = cap
+    df_estab["UTIL_%"] = (df_estab["ESTAB_UNDS"] / cap * 100).round(1)
+    df_estab["EXCESO"] = (df_estab["ESTAB_UNDS"] - cap).clip(lower=0).astype(int)
+    # “lo que queda para el día siguiente” es la propia ocupación de ese día
+    df_estab["AL_DIA_SIGUIENTE"] = df_estab["ESTAB_UNDS"].astype(int)
+    return df_estab
+
+def generar_excel(df_out):
+    output = BytesIO()
+    df_out.to_excel(output, index=False)
+    output.seek(0)
+    return output
+
 # -------------------------------
-# Planificador (usa límite GLOBAL, overrides por PRODUCTO y estabilización)
+# Planificador (GLOBAL, overrides por PRODUCTO y estabilización)
 # -------------------------------
 def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto):
     df_corr = df_plan.copy()
@@ -175,28 +228,38 @@ def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto)
     df_corr["DIFERENCIA_DIAS_SAL"] = df_corr["DIAS_SAL"] - df_corr["DIAS_SAL_OPTIMOS"]
     return df_corr
 
-def generar_excel(df_out):
-    output = BytesIO()
-    df_out.to_excel(output, index=False)
-    output.seek(0)
-    return output
-
 # -------------------------------
 # Ejecución de la app
 # -------------------------------
 if uploaded_file is not None:
+    # Lee el Excel
     df = pd.read_excel(uploaded_file, engine="openpyxl")
-    # Normaliza fechas
-    df["DIA"]         = pd.to_datetime(df["DIA"], errors="coerce")
-    df["ENTRADA_SAL"] = pd.to_datetime(df["ENTRADA_SAL"], errors="coerce")
-    df["SALIDA_SAL"]  = pd.to_datetime(df["SALIDA_SAL"], errors="coerce")
+
+    # Alias básicos por si vienen con espacios/guiones bajos
+    alias_map = {
+        "DIAS SAL OPTIMOS": "DIAS_SAL_OPTIMOS",
+        "DIAS_SAL_OPTIMOS": "DIAS_SAL_OPTIMOS",
+        "ENTRADA SAL": "ENTRADA_SAL",
+        "SALIDA SAL": "SALIDA_SAL"
+    }
+    for a, target in alias_map.items():
+        if a in df.columns and target not in df.columns:
+            df.rename(columns={a: target}, inplace=True)
+
+    # Normaliza tipos
+    for col in ["DIA", "ENTRADA_SAL", "SALIDA_SAL"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+    if "UNDS" in df.columns:
+        df["UNDS"] = pd.to_numeric(df["UNDS"], errors="coerce").fillna(0).astype(int)
 
     # ---- Overrides por PRODUCTO (sidebar) ----
     dias_max_por_producto = {}
     if "PRODUCTO" in df.columns:
-        productos = sorted(df["PRODUCTO"].dropna().unique().tolist())
+        productos = sorted(df["PRODUCTO"].dropna().astype(str).unique().tolist())
         st.sidebar.markdown("### ⏱️ Días máx. almacenamiento por PRODUCTO")
 
+        # Inicializa/actualiza tabla de overrides si cambian los productos
         if "overrides_df" not in st.session_state or set(st.session_state.get("productos_cache", [])) != set(productos):
             st.session_state.overrides_df = pd.DataFrame({
                 "PRODUCTO": productos,
@@ -215,7 +278,6 @@ if uploaded_file is not None:
             },
             key="overrides_editor"
         )
-
         if not overrides_df.empty:
             dias_max_por_producto = dict(zip(overrides_df["PRODUCTO"], overrides_df["DIAS_MAX_ALMACEN"]))
     else:
@@ -227,17 +289,18 @@ if uploaded_file is not None:
         st.session_state["df_planificado"] = df_planificado
         st.success("✅ Planificación aplicada a filas vacías.")
 
-    # Mostrar tabla editable, gráfico y descarga solo después de aplicar planificación
+    # Mostrar tabla editable, gráfico y estabilización después de planificar
     if "df_planificado" in st.session_state:
         df_editable = st.data_editor(
             st.session_state["df_planificado"],
             column_config={
                 col: st.column_config.DateColumn(col, disabled=False)
-                if pd.api.types.is_datetime64_any_dtype(df[col])
+                if pd.api.types.is_datetime64_any_dtype(st.session_state["df_planificado"][col])
                 else st.column_config.NumberColumn(col, disabled=False)
-                for col in df.columns
+                for col in st.session_state["df_planificado"].columns
             },
-            num_rows="dynamic"
+            num_rows="dynamic",
+            use_container_width=True
         )
 
         # -------------------------------
@@ -248,8 +311,8 @@ if uploaded_file is not None:
         fig = go.Figure()
 
         # Preparar data limpia (evitar NaT)
-        df_e = df_editable.dropna(subset=["ENTRADA_SAL", "UNDS"])
-        df_s = df_editable.dropna(subset=["SALIDA_SAL", "UNDS"])
+        df_e = df_editable.dropna(subset=["ENTRADA_SAL", "UNDS"]) if "ENTRADA_SAL" in df_editable.columns else pd.DataFrame()
+        df_s = df_editable.dropna(subset=["SALIDA_SAL", "UNDS"]) if "SALIDA_SAL" in df_editable.columns else pd.DataFrame()
 
         # Pivot para apilar por LOTE dentro de cada fecha
         pivot_e = (
@@ -257,7 +320,7 @@ if uploaded_file is not None:
                 .sum()
                 .unstack(fill_value=0)
                 .sort_index()
-            if {"ENTRADA_SAL", "LOTE", "UNDS"}.issubset(df_e.columns)
+            if not df_e.empty and {"ENTRADA_SAL", "LOTE", "UNDS"}.issubset(df_e.columns)
             else pd.DataFrame()
         )
         pivot_s = (
@@ -265,7 +328,7 @@ if uploaded_file is not None:
                 .sum()
                 .unstack(fill_value=0)
                 .sort_index()
-            if {"SALIDA_SAL", "LOTE", "UNDS"}.issubset(df_s.columns)
+            if not df_s.empty and {"SALIDA_SAL", "LOTE", "UNDS"}.issubset(df_s.columns)
             else pd.DataFrame()
         )
 
@@ -283,7 +346,7 @@ if uploaded_file is not None:
                         marker_color="blue",
                         marker_line_color="white",
                         marker_line_width=1.2,
-                        hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
+                        hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
                         showlegend=True
                     ))
 
@@ -301,7 +364,7 @@ if uploaded_file is not None:
                         marker_color="orange",
                         marker_line_color="white",
                         marker_line_width=1.2,
-                        hovertemplate="Fecha: %{x}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
+                        hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
                         showlegend=True
                     ))
 
@@ -363,15 +426,65 @@ if uploaded_file is not None:
             xaxis=dict(
                 tickmode="array",
                 tickvals=ticks,
-                tickformat="%A, %-d %b"
+                tickformat="%A, %-d %b"  # Inglés
             ),
             bargap=0.25,
-            bargroupgap=0.10,
+            bargroupgap=0.12,
             annotations=annotations
         )
         fig.update_yaxes(range=[0, max_y * 1.25])
 
         st.plotly_chart(fig, use_container_width=True)
+
+        # ===============================
+        # 📦 Estabilización: tabla + gráfico + descarga
+        # ===============================
+        df_estab = calcular_estabilizacion_diaria(df_editable, ESTAB_CAP)
+
+        with st.expander("📦 Ocupación diaria de cámara de estabilización", expanded=True):
+            if df_estab.empty:
+                st.info("No hay días con stock en estabilización (todas las entradas son el mismo día de recepción).")
+            else:
+                # Tabla
+                st.dataframe(
+                    df_estab,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                # Gráfico (barras por día + línea de capacidad)
+                colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > ESTAB_CAP else "teal")
+
+                fig_est = go.Figure()
+                fig_est.add_trace(go.Bar(
+                    x=df_estab["FECHA"],
+                    y=df_estab["ESTAB_UNDS"],
+                    marker_color=colores,
+                    name="Ocupación estabilización",
+                    hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Unds: %{y}<extra></extra>"
+                ))
+                fig_est.add_hline(
+                    y=ESTAB_CAP, line_dash="dash", line_color="orange",
+                    annotation_text=f"Capacidad: {ESTAB_CAP}",
+                    annotation_position="top left"
+                )
+                fig_est.update_layout(
+                    xaxis_title="Fecha",
+                    yaxis_title="Unidades en estabilización",
+                    bargap=0.25,
+                )
+                st.plotly_chart(fig_est, use_container_width=True)
+
+                # Descargar Excel de estabilización
+                estab_xlsx = BytesIO()
+                df_estab.to_excel(estab_xlsx, index=False)
+                estab_xlsx.seek(0)
+                st.download_button(
+                    "💾 Descargar estabilización (Excel)",
+                    data=estab_xlsx,
+                    file_name="estabilizacion_diaria.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
         # -------------------------------
         # Botón para descargar Excel (resultado visible)
@@ -383,19 +496,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
