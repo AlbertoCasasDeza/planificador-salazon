@@ -9,6 +9,11 @@ st.set_page_config(page_title="Planificador Lotes Naturiber", layout="wide")
 st.title("🧠 Planificador de Lotes Salazón Naturiber")
 
 # -------------------------------
+# Parámetros fijos (no visibles)
+# -------------------------------
+ESTAB_CAP = 3000  # capacidad diaria de la cámara de estabilización (unds)
+
+# -------------------------------
 # Panel de configuración (globales)
 # -------------------------------
 st.sidebar.header("Parámetros de planificación")
@@ -56,14 +61,42 @@ def anterior_habil(fecha):
         f -= timedelta(days=1)
     return f
 
+def _sumar_en_rango(dic, fecha_ini, fecha_fin_inclusive, unds):
+    """Suma 'unds' en dic[fecha] para todas las fechas entre ini y fin (ambas incluidas)."""
+    if pd.isna(fecha_ini) or pd.isna(fecha_fin_inclusive):
+        return
+    for d in pd.date_range(fecha_ini, fecha_fin_inclusive, freq="D"):
+        dic[d] = dic.get(d, 0) + unds
+
+def _cabe_en_estab(dic, fecha_ini, fecha_fin_inclusive, unds, cap):
+    """Comprueba si al sumar 'unds' en cada fecha del rango se respetaría 'cap'."""
+    if pd.isna(fecha_ini) or pd.isna(fecha_fin_inclusive):
+        return True
+    if fecha_fin_inclusive < fecha_ini:
+        return True  # entra el mismo día -> no ocupa estabilización
+    for d in pd.date_range(fecha_ini, fecha_fin_inclusive, freq="D"):
+        if dic.get(d, 0) + unds > cap:
+            return False
+    return True
+
 # -------------------------------
-# Planificador (usa límite GLOBAL y overrides por PRODUCTO)
+# Planificador (usa límite GLOBAL, overrides por PRODUCTO y estabilización)
 # -------------------------------
 def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto):
     df_corr = df_plan.copy()
+
     # Cargas ya planificadas (se respetan)
     carga_entrada = df_corr.dropna(subset=["ENTRADA_SAL"]).groupby("ENTRADA_SAL")["UNDS"].sum().to_dict()
     carga_salida  = df_corr.dropna(subset=["SALIDA_SAL"]).groupby("SALIDA_SAL")["UNDS"].sum().to_dict()
+
+    # Ocupación diaria ya existente en estabilización (por filas ya planificadas)
+    estab_stock = {}
+    for _, r in df_corr.dropna(subset=["ENTRADA_SAL"]).iterrows():
+        dia_rec = r["DIA"]
+        ent     = r["ENTRADA_SAL"]
+        unds    = r["UNDS"]
+        if pd.notna(dia_rec) and pd.notna(ent) and ent.date() > dia_rec.date():
+            _sumar_en_rango(estab_stock, dia_rec, ent - pd.Timedelta(days=1), unds)
 
     # Solo filas con ENTRADA_SAL NaT
     for idx, row in df_corr[df_corr["ENTRADA_SAL"].isna()].iterrows():
@@ -76,61 +109,65 @@ def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto)
         dias_max_almacen = dias_max_por_producto.get(prod, dias_max_almacen_global)
 
         entrada_valida = False
-
-        # Primer día hábil >= DIA (el límite es por días naturales hasta esta "entrada")
         entrada_ini = dia_recepcion if es_habil(dia_recepcion) else siguiente_habil(dia_recepcion)
 
         for capacidad in [capacidad1, capacidad2]:
             entrada = entrada_ini
 
-            # Límite por días naturales entre DIA y ENTRADA_SAL candidato
+            # Límite: días naturales entre DIA y ENTRADA_SAL candidato
             while (entrada - dia_recepcion).days <= dias_max_almacen:
-                # Capacidad ENTRADA
+                # 1) Capacidad ENTRADA (día de entrada)
                 if carga_entrada.get(entrada, 0) + unds <= capacidad:
-                    # Salida ideal
-                    salida = entrada + timedelta(days=dias_sal_optimos)
 
-                    # Ajuste SALIDA por finde
-                    if ajuste_finde:
-                        if salida.weekday() == 5:
-                            salida = anterior_habil(salida)
-                        elif salida.weekday() == 6:
-                            salida = siguiente_habil(salida)
+                    # 2) Capacidad estabilización entre [DIA, ENTRADA-1]
+                    if _cabe_en_estab(estab_stock, dia_recepcion, entrada - pd.Timedelta(days=1), unds, ESTAB_CAP):
 
-                    # Ajuste SALIDA por festivo
-                    if ajuste_festivos and (salida in dias_festivos):
-                        dia_semana = salida.weekday()
-                        if dia_semana == 0:
-                            salida = siguiente_habil(salida)
-                        elif dia_semana in [1, 2, 3]:
-                            anterior = anterior_habil(salida)
-                            siguiente = siguiente_habil(salida)
-                            carga_ant  = carga_salida.get(anterior, 0)
-                            carga_sig  = carga_salida.get(siguiente, 0)
-                            salida = anterior if carga_ant <= carga_sig else siguiente
-                        elif dia_semana == 4:
-                            salida = anterior_habil(salida)
+                        # 3) Calcular SALIDA + ajustes
+                        salida = entrada + timedelta(days=dias_sal_optimos)
+                        if ajuste_finde:
+                            if salida.weekday() == 5:
+                                salida = anterior_habil(salida)
+                            elif salida.weekday() == 6:
+                                salida = siguiente_habil(salida)
+                        if ajuste_festivos and (salida in dias_festivos):
+                            dia_semana = salida.weekday()
+                            if dia_semana == 0:
+                                salida = siguiente_habil(salida)
+                            elif dia_semana in [1, 2, 3]:
+                                anterior = anterior_habil(salida)
+                                siguiente = siguiente_habil(salida)
+                                carga_ant  = carga_salida.get(anterior, 0)
+                                carga_sig  = carga_salida.get(siguiente, 0)
+                                salida = anterior if carga_ant <= carga_sig else siguiente
+                            elif dia_semana == 4:
+                                salida = anterior_habil(salida)
 
-                    # Capacidad SALIDA
-                    if carga_salida.get(salida, 0) + unds <= capacidad:
-                        # Aceptamos
-                        df_corr.at[idx, "ENTRADA_SAL"]      = entrada
-                        df_corr.at[idx, "SALIDA_SAL"]       = salida
-                        df_corr.at[idx, "DIAS_SAL"]         = (salida - entrada).days
-                        df_corr.at[idx, "DIAS_ALMACENADOS"] = (entrada - dia_recepcion).days
-                        df_corr.at[idx, "LOTE_NO_ENCAJA"]   = "No"
-                        carga_entrada[entrada] = carga_entrada.get(entrada, 0) + unds
-                        carga_salida[salida]   = carga_salida.get(salida, 0)   + unds
-                        entrada_valida = True
-                        break
+                        # 4) Capacidad SALIDA (día de salida)
+                        if carga_salida.get(salida, 0) + unds <= capacidad:
+                            # Aceptamos
+                            df_corr.at[idx, "ENTRADA_SAL"]      = entrada
+                            df_corr.at[idx, "SALIDA_SAL"]       = salida
+                            df_corr.at[idx, "DIAS_SAL"]         = (salida - entrada).days
+                            df_corr.at[idx, "DIAS_ALMACENADOS"] = (entrada - dia_recepcion).days
+                            df_corr.at[idx, "LOTE_NO_ENCAJA"]   = "No"
 
-                # Siguiente día hábil (el límite natural lo controla el while)
+                            # actualizar cargas día
+                            carga_entrada[entrada] = carga_entrada.get(entrada, 0) + unds
+                            carga_salida[salida]   = carga_salida.get(salida, 0)   + unds
+
+                            # actualizar ocupación en estabilización [DIA, ENTRADA-1]
+                            if entrada.date() > dia_recepcion.date():
+                                _sumar_en_rango(estab_stock, dia_recepcion, entrada - pd.Timedelta(days=1), unds)
+
+                            entrada_valida = True
+                            break
+
+                # siguiente día hábil (el límite natural lo controla el while)
                 entrada = siguiente_habil(entrada)
 
             if entrada_valida:
                 break
 
-        # Si no encontró hueco en ninguna pasada
         if not entrada_valida:
             df_corr.at[idx, "LOTE_NO_ENCAJA"] = "Sí"
 
@@ -160,7 +197,6 @@ if uploaded_file is not None:
         productos = sorted(df["PRODUCTO"].dropna().unique().tolist())
         st.sidebar.markdown("### ⏱️ Días máx. almacenamiento por PRODUCTO")
 
-        # Inicializamos tabla de overrides si es la primera vez o si cambió el set de productos
         if "overrides_df" not in st.session_state or set(st.session_state.get("productos_cache", [])) != set(productos):
             st.session_state.overrides_df = pd.DataFrame({
                 "PRODUCTO": productos,
@@ -269,77 +305,51 @@ if uploaded_file is not None:
                         showlegend=True
                     ))
 
-        # Etiquetas separadas con ANOTACIONES (en píxeles): UNDS arriba y LOTES debajo,
-        # centradas por grupo (Entrada izquierda, Salida derecha) y siempre fuera de la barra.
-        label_shift = pd.Timedelta(hours=8)  # desplaza x para centrar sobre el grupo
+        # Etiquetas separadas con anotaciones en píxeles (evitan solapes)
+        label_shift = pd.Timedelta(hours=8)  # centra sobre el grupo
         annotations = []
 
-        # Totales Entrada/Salida para calcular headroom del eje Y
+        # Totales Entrada/Salida
         tot_e = pd.DataFrame()
         tot_s = pd.DataFrame()
-
         if not df_e.empty:
             if "LOTE" in df_e.columns:
-                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"),
-                                                        LOTES=("LOTE", "nunique")).reset_index()
+                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS","sum"), LOTES=("LOTE","nunique")).reset_index()
             else:
-                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS", "sum"),
-                                                        LOTES=("UNDS", "size")).reset_index()
-
+                tot_e = df_e.groupby("ENTRADA_SAL").agg(UNDS=("UNDS","sum"), LOTES=("UNDS","size")).reset_index()
         if not df_s.empty:
             if "LOTE" in df_s.columns:
-                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"),
-                                                       LOTES=("LOTE", "nunique")).reset_index()
+                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS","sum"), LOTES=("LOTE","nunique")).reset_index()
             else:
-                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS", "sum"),
-                                                       LOTES=("UNDS", "size")).reset_index()
+                tot_s = df_s.groupby("SALIDA_SAL").agg(UNDS=("UNDS","sum"), LOTES=("UNDS","size")).reset_index()
 
-        # Headroom vertical para que las etiquetas nunca se corten ni pisen la barra
+        # Headroom vertical
         max_e = int(tot_e["UNDS"].max()) if not tot_e.empty else 0
         max_s = int(tot_s["UNDS"].max()) if not tot_s.empty else 0
-        max_y = max(max_e, max_s)
-        if max_y == 0:
-            max_y = 1  # evita rango [0,0]
+        max_y = max(max_e, max_s) or 1
 
-        # Helper para añadir 2 anotaciones por barra (UNDS y LOTES)
         def add_two_labels(x_dt, y_val, lots_count, is_entry=True):
-            # x pos desplazado a izquierda (entrada) o derecha (salida)
             x_pos = x_dt - label_shift if is_entry else x_dt + label_shift
-            # base mínima para que no quede pegado al eje
             y_base = max(y_val, max_y * 0.02)
-
-            # UNDS (arriba del todo, 28 px sobre la cima de la barra)
             annotations.append(dict(
                 x=x_pos, y=y_base, xref="x", yref="y",
                 text=f"<b>{int(y_val)}</b>",
-                showarrow=False,
-                yshift=28,  # píxeles
-                align="center",
-                font=dict(size=12, color="black")
+                showarrow=False, yshift=28,
+                align="center", font=dict(size=13, color="black")
             ))
-            # LOTES (un poco por debajo de UNDS, también fuera de la barra)
             annotations.append(dict(
                 x=x_pos, y=y_base, xref="x", yref="y",
                 text=f"{int(lots_count)} lotes",
-                showarrow=False,
-                yshift=12,  # píxeles
-                align="center",
-                font=dict(size=10, color="black")
+                showarrow=False, yshift=12,
+                align="center", font=dict(size=11, color="gray")
             ))
 
-        # Añadir anotaciones para ENTRADA (izquierda)
         if not tot_e.empty:
             for _, r in tot_e.iterrows():
                 add_two_labels(r["ENTRADA_SAL"], r["UNDS"], r["LOTES"], is_entry=True)
-
-        # Añadir anotaciones para SALIDA (derecha)
         if not tot_s.empty:
             for _, r in tot_s.iterrows():
                 add_two_labels(r["SALIDA_SAL"], r["UNDS"], r["LOTES"], is_entry=False)
-
-        # Aplicar anotaciones y dar aire arriba
-        fig.update_layout(annotations=annotations)
-        fig.update_yaxes(range=[0, max_y * 1.25])  # 25% de aire por encima de la barra más alta
 
         # Eje X: todas las fechas presentes en entradas o salidas
         ticks = pd.Index(sorted(set(
@@ -347,17 +357,19 @@ if uploaded_file is not None:
             (pivot_s.index.tolist() if not pivot_s.empty else [])
         )))
         fig.update_layout(
-            barmode="relative",  # apila por lote dentro de cada offsetgroup y muestra entrada/salida lado a lado
+            barmode="relative",  # apila por lote en cada grupo y muestra entrada/salida lado a lado
             xaxis_title="Fecha",
             yaxis_title="Unidades",
             xaxis=dict(
                 tickmode="array",
                 tickvals=ticks,
-                tickformat="%A, %-d %b"  # Inglés: Monday, 8 Sep
+                tickformat="%A, %-d %b"
             ),
             bargap=0.25,
-            bargroupgap=0.10
+            bargroupgap=0.10,
+            annotations=annotations
         )
+        fig.update_yaxes(range=[0, max_y * 1.25])
 
         st.plotly_chart(fig, use_container_width=True)
 
@@ -371,6 +383,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
