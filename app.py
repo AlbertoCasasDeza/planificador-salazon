@@ -473,12 +473,11 @@ if uploaded_file is not None:
 
         with st.expander("📦 Ocupación diaria de cámara de estabilización", expanded=True):
             if df_estab.empty:
-                st.info("No hay días con stock en estabilización (todas las entradas son el mismo día de recepción).")
+                st.info("No hay días con stock en estabilización.")
             else:
-                # Tabla con desglose Paleta/Jamón
+                # Tabla SIN columna AL_DIA_SIGUIENTE
                 st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
-                # Gráfico como antes (total), con etiqueta de total encima
                 colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > ESTAB_CAP else "teal")
 
                 fig_est = go.Figure()
@@ -486,10 +485,9 @@ if uploaded_file is not None:
                     x=df_estab["FECHA"],
                     y=df_estab["ESTAB_UNDS"],
                     marker_color=colores,
-                    name="Ocupación estabilización",
-                    hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Unds: %{y}<extra></extra>"
+                    hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Unds: %{y}<extra></extra>",
+                    showlegend=False   # ❌ sin leyenda
                 ))
-                # Etiqueta de total en la parte superior de cada barra
                 fig_est.add_trace(go.Scatter(
                     x=df_estab["FECHA"],
                     y=df_estab["ESTAB_UNDS"],
@@ -507,10 +505,11 @@ if uploaded_file is not None:
                     xaxis_title="Fecha",
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
+                    showlegend=False  # ❌ aseguramos sin leyenda
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
-                # Descargar Excel de estabilización con desglose
+                # Descargar Excel
                 estab_xlsx = BytesIO()
                 df_estab.to_excel(estab_xlsx, index=False)
                 estab_xlsx.seek(0)
@@ -531,3 +530,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
