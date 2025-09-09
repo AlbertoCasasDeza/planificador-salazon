@@ -11,7 +11,7 @@ st.title("🧠 Planificador de Lotes Salazón Naturiber")
 # -------------------------------
 # Parámetros fijos (no visibles)
 # -------------------------------
-ESTAB_CAP = 3500  # capacidad diaria de la cámara de estabilización (unds)
+ESTAB_CAP = 3000  # capacidad diaria de la cámara de estabilización (unds)
 
 # -------------------------------
 # Panel de configuración (globales)
@@ -37,7 +37,7 @@ dias_festivos = pd.to_datetime(dias_festivos_list)
 ajuste_finde = st.sidebar.checkbox("Ajustar fines de semana (SALIDA)", value=True)
 ajuste_festivos = st.sidebar.checkbox("Ajustar festivos (SALIDA)", value=True)
 
-# Botón opcional para limpiar estado si algo “se queda pillado”
+# Botón opcional para limpiar estado
 if st.sidebar.button("🔄 Reiniciar sesión"):
     st.session_state.clear()
     st.rerun()
@@ -51,7 +51,6 @@ uploaded_file = st.file_uploader("📂 Sube tu Excel con los lotes", type=["xlsx
 # Funciones auxiliares
 # -------------------------------
 def es_habil(fecha):
-    # Días laborables y no festivos (fechas a medianoche según tu Excel)
     return fecha.weekday() < 5 and fecha not in dias_festivos
 
 def siguiente_habil(fecha):
@@ -92,19 +91,15 @@ def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFr
     Para cada lote, si ENTRADA_SAL > DIA, suma UNDS en todos los días [DIA, ENTRADA_SAL - 1].
     """
     carga = {}
-
     for _, r in df_plan.iterrows():
         dia = r.get("DIA")
         entrada = r.get("ENTRADA_SAL")
         unds = int(r.get("UNDS", 0) or 0)
-
         if pd.isna(dia) or pd.isna(entrada) or unds <= 0:
             continue
-
         fin = entrada - pd.Timedelta(days=1)
         if fin.date() < dia.date():
             continue
-
         for d in pd.date_range(dia.normalize(), fin.normalize(), freq="D"):
             d0 = d.normalize()
             carga[d0] = carga.get(d0, 0) + unds
@@ -122,6 +117,7 @@ def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFr
     df_estab["CAPACIDAD"] = cap
     df_estab["UTIL_%"] = (df_estab["ESTAB_UNDS"] / cap * 100).round(1)
     df_estab["EXCESO"] = (df_estab["ESTAB_UNDS"] - cap).clip(lower=0).astype(int)
+    df_estab["AL_DIA_SIGUIENTE"] = df_estab["ESTAB_UNDS"].astype(int)
     return df_estab
 
 def generar_excel(df_out):
@@ -338,14 +334,14 @@ if uploaded_file is not None:
                     fig.add_trace(go.Bar(
                         x=pivot_e.index,
                         y=y_vals,
-                        name=f"{lote} (Entrada)",
+                        name=f"Lote {lote}",                # un único item por lote en la leyenda
                         offsetgroup="entrada",
-                        legendgroup="entrada",
+                        legendgroup=f"lote-{lote}",         # agrupa por lote
                         marker_color="blue",
                         marker_line_color="white",
                         marker_line_width=1.2,
                         hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
-                        showlegend=True
+                        showlegend=True                     # solo mostramos la leyenda aquí
                     ))
 
         # Salidas (naranja): apiladas por LOTE en offsetgroup "salida"
@@ -356,18 +352,18 @@ if uploaded_file is not None:
                     fig.add_trace(go.Bar(
                         x=pivot_s.index,
                         y=y_vals,
-                        name=f"{lote} (Salida)",
+                        name=f"Lote {lote} (Salida)",
                         offsetgroup="salida",
-                        legendgroup="salida",
+                        legendgroup=f"lote-{lote}",         # MISMO grupo → se ocultan/ven juntos
                         marker_color="orange",
                         marker_line_color="white",
                         marker_line_width=1.2,
                         hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Lote: " + str(lote) + "<br>UNDS: %{y}<extra></extra>",
-                        showlegend=True
+                        showlegend=False                    # no duplicamos en leyenda
                     ))
 
-        # Etiquetas separadas con anotaciones en píxeles (evitan solapes)
-        label_shift = pd.Timedelta(hours=8)  # centra sobre el grupo
+        # Etiquetas separadas con anotaciones en píxeles
+        label_shift = pd.Timedelta(hours=8)
         annotations = []
 
         # Totales Entrada/Salida
@@ -412,7 +408,7 @@ if uploaded_file is not None:
             for _, r in tot_s.iterrows():
                 add_two_labels(r["SALIDA_SAL"], r["UNDS"], r["LOTES"], is_entry=False)
 
-        # Eje X: todas las fechas presentes en entradas o salidas
+        # Eje X y leyenda con comportamiento requerido
         ticks = pd.Index(sorted(set(
             (pivot_e.index.tolist() if not pivot_e.empty else []) +
             (pivot_s.index.tolist() if not pivot_s.empty else [])
@@ -424,11 +420,16 @@ if uploaded_file is not None:
             xaxis=dict(
                 tickmode="array",
                 tickvals=ticks,
-                tickformat="%A, %-d %b"  # Inglés
+                tickformat="%A, %-d %b"  # Inglés: Monday, 8 Sep
             ),
             bargap=0.25,
             bargroupgap=0.12,
-            annotations=annotations
+            annotations=annotations,
+            legend=dict(                 # 👇 comportamiento de la leyenda
+                itemclick="toggleothers",      # click -> deja solo ese lote
+                itemdoubleclick="toggle",      # doble click -> alterna normal
+                groupclick="togglegroup"       # controla entrada + salida del lote a la vez
+            )
         )
         fig.update_yaxes(range=[0, max_y * 1.25])
 
@@ -443,14 +444,8 @@ if uploaded_file is not None:
             if df_estab.empty:
                 st.info("No hay días con stock en estabilización (todas las entradas son el mismo día de recepción).")
             else:
-                # Tabla
-                st.dataframe(
-                    df_estab,
-                    use_container_width=True,
-                    hide_index=True
-                )
+                st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
-                # Gráfico (barras por día + línea de capacidad)
                 colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > ESTAB_CAP else "teal")
 
                 fig_est = go.Figure()
@@ -494,5 +489,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
