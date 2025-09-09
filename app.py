@@ -87,37 +87,61 @@ def _cabe_en_estab(dic, fecha_ini, fecha_fin_inclusive, unds, cap):
 
 def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFrame:
     """
-    Devuelve un dataframe con la ocupación diaria de la cámara de estabilización.
-    Para cada lote, si ENTRADA_SAL > DIA, suma UNDS en todos los días [DIA, ENTRADA_SAL - 1].
+    Calcula la ocupación diaria de la cámara de estabilización.
+    Desglosa por tipo de producto:
+      - Paleta: PRODUCTO empieza por 'P'
+      - Jamón : PRODUCTO empieza por 'J'
+    Un lote ocupa estabilización en los días naturales [DIA, ENTRADA_SAL - 1].
     """
-    carga = {}
+    carga_total  = {}
+    carga_paleta = {}
+    carga_jamon  = {}
+
     for _, r in df_plan.iterrows():
-        dia = r.get("DIA")
+        dia     = r.get("DIA")
         entrada = r.get("ENTRADA_SAL")
-        unds = int(r.get("UNDS", 0) or 0)
+        unds    = int(r.get("UNDS", 0) or 0)
+        prod    = str(r.get("PRODUCTO", ""))
+
         if pd.isna(dia) or pd.isna(entrada) or unds <= 0:
             continue
+
         fin = entrada - pd.Timedelta(days=1)
         if fin.date() < dia.date():
-            continue
+            continue  # entra el mismo día, no pisa estabilización
+
         for d in pd.date_range(dia.normalize(), fin.normalize(), freq="D"):
             d0 = d.normalize()
-            carga[d0] = carga.get(d0, 0) + unds
+            carga_total[d0] = carga_total.get(d0, 0) + unds
+            if prod.startswith("P"):
+                carga_paleta[d0] = carga_paleta.get(d0, 0) + unds
+            elif prod.startswith("J"):
+                carga_jamon[d0] = carga_jamon.get(d0, 0) + unds
 
-    if not carga:
-        return pd.DataFrame(columns=["FECHA", "ESTAB_UNDS", "CAPACIDAD", "UTIL_%", "EXCESO", "AL_DIA_SIGUIENTE"])
+    if not carga_total:
+        return pd.DataFrame(columns=[
+            "FECHA", "ESTAB_UNDS", "ESTAB_PALETA", "ESTAB_JAMON",
+            "CAPACIDAD", "UTIL_%", "EXCESO", "AL_DIA_SIGUIENTE"
+        ])
 
     df_estab = (
-        pd.Series(carga, name="ESTAB_UNDS")
+        pd.Series(carga_total, name="ESTAB_UNDS")
         .sort_index()
         .to_frame()
         .reset_index()
         .rename(columns={"index": "FECHA"})
     )
-    df_estab["CAPACIDAD"] = cap
-    df_estab["UTIL_%"] = (df_estab["ESTAB_UNDS"] / cap * 100).round(1)
-    df_estab["EXCESO"] = (df_estab["ESTAB_UNDS"] - cap).clip(lower=0).astype(int)
+    df_estab["ESTAB_PALETA"] = df_estab["FECHA"].map(lambda d: int(carga_paleta.get(d.normalize(), 0)))
+    df_estab["ESTAB_JAMON"]  = df_estab["FECHA"].map(lambda d: int(carga_jamon.get(d.normalize(), 0)))
+    df_estab["CAPACIDAD"]    = cap
+    df_estab["UTIL_%"]       = (df_estab["ESTAB_UNDS"] / cap * 100).round(1)
+    df_estab["EXCESO"]       = (df_estab["ESTAB_UNDS"] - cap).clip(lower=0).astype(int)
     df_estab["AL_DIA_SIGUIENTE"] = df_estab["ESTAB_UNDS"].astype(int)
+
+    df_estab = df_estab[
+        ["FECHA", "ESTAB_UNDS", "ESTAB_PALETA", "ESTAB_JAMON",
+         "CAPACIDAD", "UTIL_%", "EXCESO", "AL_DIA_SIGUIENTE"]
+    ]
     return df_estab
 
 def generar_excel(df_out):
@@ -285,20 +309,27 @@ if uploaded_file is not None:
 
     # Mostrar tabla editable, gráfico y estabilización después de planificar
     if "df_planificado" in st.session_state:
+        df_show = st.session_state["df_planificado"]
+        # Column config más robusta: fecha / número / texto
+        column_config = {}
+        for col in df_show.columns:
+            s = df_show[col]
+            if pd.api.types.is_datetime64_any_dtype(s):
+                column_config[col] = st.column_config.DateColumn(col, disabled=False)
+            elif pd.api.types.is_numeric_dtype(s):
+                column_config[col] = st.column_config.NumberColumn(col, disabled=False)
+            else:
+                column_config[col] = st.column_config.TextColumn(col)
+
         df_editable = st.data_editor(
-            st.session_state["df_planificado"],
-            column_config={
-                col: st.column_config.DateColumn(col, disabled=False)
-                if pd.api.types.is_datetime64_any_dtype(st.session_state["df_planificado"][col])
-                else st.column_config.NumberColumn(col, disabled=False)
-                for col in st.session_state["df_planificado"].columns
-            },
+            df_show,
+            column_config=column_config,
             num_rows="dynamic",
             use_container_width=True
         )
 
         # -------------------------------
-        # Gráfico: Entrada vs Salida lado a lado + apilado por LOTE
+        # Gráfico: Entrada vs Salida lado a lado + apilado por LOTE (leyenda por lote)
         # -------------------------------
         st.subheader("📊 Entradas y salidas por fecha con detalle por lote")
 
@@ -425,7 +456,7 @@ if uploaded_file is not None:
             bargap=0.25,
             bargroupgap=0.12,
             annotations=annotations,
-            legend=dict(                 # 👇 comportamiento de la leyenda
+            legend=dict(
                 itemclick="toggleothers",      # click -> deja solo ese lote
                 itemdoubleclick="toggle",      # doble click -> alterna normal
                 groupclick="togglegroup"       # controla entrada + salida del lote a la vez
@@ -444,8 +475,10 @@ if uploaded_file is not None:
             if df_estab.empty:
                 st.info("No hay días con stock en estabilización (todas las entradas son el mismo día de recepción).")
             else:
+                # Tabla con desglose Paleta/Jamón
                 st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
+                # Gráfico como antes (total), con etiqueta de total encima
                 colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > ESTAB_CAP else "teal")
 
                 fig_est = go.Figure()
@@ -455,6 +488,15 @@ if uploaded_file is not None:
                     marker_color=colores,
                     name="Ocupación estabilización",
                     hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Unds: %{y}<extra></extra>"
+                ))
+                # Etiqueta de total en la parte superior de cada barra
+                fig_est.add_trace(go.Scatter(
+                    x=df_estab["FECHA"],
+                    y=df_estab["ESTAB_UNDS"],
+                    mode="text",
+                    text=[str(int(v)) for v in df_estab["ESTAB_UNDS"]],
+                    textposition="top center",
+                    showlegend=False
                 ))
                 fig_est.add_hline(
                     y=ESTAB_CAP, line_dash="dash", line_color="orange",
@@ -468,7 +510,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
-                # Descargar Excel de estabilización
+                # Descargar Excel de estabilización con desglose
                 estab_xlsx = BytesIO()
                 df_estab.to_excel(estab_xlsx, index=False)
                 estab_xlsx.seek(0)
