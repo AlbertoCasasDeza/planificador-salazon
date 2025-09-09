@@ -122,8 +122,6 @@ def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFr
     df_estab["CAPACIDAD"] = cap
     df_estab["UTIL_%"] = (df_estab["ESTAB_UNDS"] / cap * 100).round(1)
     df_estab["EXCESO"] = (df_estab["ESTAB_UNDS"] - cap).clip(lower=0).astype(int)
-    # “lo que queda para el día siguiente” es la propia ocupación de ese día
-    df_estab["AL_DIA_SIGUIENTE"] = df_estab["ESTAB_UNDS"].astype(int)
     return df_estab
 
 def generar_excel(df_out):
@@ -496,3 +494,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
