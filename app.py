@@ -1,4 +1,4 @@
-# app.py
+    # app.py
 import pandas as pd
 import streamlit as st
 from datetime import timedelta
@@ -651,7 +651,7 @@ if uploaded_file is not None:
             else:
                 st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
-                # Colores por exceso relativo a la capacidad del día
+                # Colores por exceso relativo a la capacidad del día (opcional)
                 colores = df_estab.apply(
                     lambda r: "crimson" if r["ESTAB_UNDS"] > r["CAPACIDAD"] else "teal",
                     axis=1
@@ -674,19 +674,17 @@ if uploaded_file is not None:
                     textposition="top center",
                     showlegend=False
                 ))
-                # Línea de capacidad efectiva por fecha (admite overrides)
-                fig_est.add_trace(go.Scatter(
-                    x=df_estab["FECHA"],
-                    y=df_estab["CAPACIDAD"],
-                    mode="lines",
-                    name="Capacidad estabilización",
-                    hovertemplate="Capacidad: %{y}<extra></extra>"
-                ))
+                # ⛳ Línea horizontal fija (estilo antiguo): capacidad base con etiqueta
+                fig_est.add_hline(
+                    y=estab_cap, line_dash="dash", line_color="orange",
+                    annotation_text=f"Capacidad: {estab_cap}",
+                    annotation_position="top left"
+                )
                 fig_est.update_layout(
                     xaxis_title="Fecha",
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
-                    showlegend=True
+                    showlegend=False      # <- sin leyenda
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
@@ -711,3 +709,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
