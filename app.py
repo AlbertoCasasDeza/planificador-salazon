@@ -356,7 +356,7 @@ if uploaded_file is not None:
         st.sidebar.info("No se encontró columna PRODUCTO. Se aplicará solo el límite GLOBAL.")
 
     # ---- Overrides de capacidad por FECHA: ENTRADA ----
-    st.sidebar.markdown("### 📅 Overrides capacidad ENTRADA (opcional)")
+    st.sidebar.markdown("### 📅 Capacidad máx. ENTRADA por día (opcional)")
 
     if "cap_overrides_ent_df" not in st.session_state:
         st.session_state.cap_overrides_ent_df = pd.DataFrame({
@@ -385,7 +385,7 @@ if uploaded_file is not None:
     )
 
     # ---- Overrides de capacidad por FECHA: SALIDA ----
-    st.sidebar.markdown("### 📅 Overrides capacidad SALIDA (opcional)")
+    st.sidebar.markdown("### 📅 Capacidad máx. SALIDA por día (opcional)")
 
     if "cap_overrides_sal_df" not in st.session_state:
         st.session_state.cap_overrides_sal_df = pd.DataFrame({
@@ -714,6 +714,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
