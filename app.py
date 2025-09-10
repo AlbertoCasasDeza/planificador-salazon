@@ -5,15 +5,15 @@ from datetime import timedelta
 import plotly.graph_objects as go
 from io import BytesIO
 
-st.set_page_config(page_title="Planificador Lotes Naturiber", layout="wide")
-st.title("🧠 Planificador de Lotes Salazón Naturiber")
+st.set_page_config(page_title="Planificador Lotes NATURIBER", layout="wide")
+st.title("🧠 Planificador de Lotes Salazón NATURIBER")
 
 # -------------------------------
 # Panel de configuración (globales)
 # -------------------------------
 st.sidebar.header("Parámetros de planificación")
-capacidad1 = st.sidebar.number_input("Capacidad máx. GENERAL (1er intento)", value=3100, step=100)
-capacidad2 = st.sidebar.number_input("Capacidad máx. GENERAL (2º intento)", value=3500, step=100)
+capacidad1 = st.sidebar.number_input("Capacidad máx. ENTRADAS/SALIDAS GENERAL (1er intento)", value=3100, step=100)
+capacidad2 = st.sidebar.number_input("Capacidad máx. ENTRADAS/SALIDAS GENERAL (2º intento)", value=3500, step=100)
 
 # Límite GLOBAL en días naturales entre DIA (recepción) y ENTRADA_SAL
 dias_max_almacen_global = st.sidebar.number_input("Días máx. envejecimiento GENERAL", value=5, step=1)
@@ -714,6 +714,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
