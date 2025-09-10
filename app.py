@@ -684,7 +684,7 @@ if uploaded_file is not None:
                     xaxis_title="Fecha",
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
-                    showlegend=False      # <- sin leyenda
+                    showlegend=False,      # <- sin leyenda
                     xaxis=dict(
                         tickmode="array",
                         tickvals=df_estab["FECHA"],
@@ -714,5 +714,6 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
