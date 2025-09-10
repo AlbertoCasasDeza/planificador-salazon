@@ -1,4 +1,4 @@
-# app.py
+# app.py 
 import pandas as pd
 import streamlit as st
 from datetime import timedelta
@@ -9,11 +9,6 @@ st.set_page_config(page_title="Planificador Lotes Naturiber", layout="wide")
 st.title("🧠 Planificador de Lotes Salazón Naturiber")
 
 # -------------------------------
-# Parámetros fijos (no visibles)
-# -------------------------------
-ESTAB_CAP = 4700  # capacidad diaria de la cámara de estabilización (unds)
-
-# -------------------------------
 # Panel de configuración (globales)
 # -------------------------------
 st.sidebar.header("Parámetros de planificación")
@@ -22,6 +17,12 @@ capacidad2 = st.sidebar.number_input("Capacidad máxima (2º intento)", value=35
 
 # Límite GLOBAL en días naturales entre DIA (recepción) y ENTRADA_SAL
 dias_max_almacen_global = st.sidebar.number_input("Días máx. almacenamiento (GLOBAL)", value=5, step=1)
+
+# 👉 Capacidad de estabilización en el sidebar (sustituye a la constante fija)
+estab_cap = st.sidebar.number_input(
+    "Capacidad cámara de estabilización (unds)",
+    value=4700, step=100, min_value=0
+)
 
 dias_festivos_default = [
     "2025-01-01", "2025-04-18", "2025-05-01", "2025-08-15",
@@ -153,7 +154,7 @@ def generar_excel(df_out):
 # -------------------------------
 # Planificador (GLOBAL, overrides por PRODUCTO y estabilización)
 # -------------------------------
-def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto):
+def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto, estab_cap):
     df_corr = df_plan.copy()
 
     # Cargas ya planificadas (se respetan)
@@ -191,7 +192,7 @@ def planificar_filas_na(df_plan, dias_max_almacen_global, dias_max_por_producto)
                 if carga_entrada.get(entrada, 0) + unds <= capacidad:
 
                     # 2) Capacidad estabilización entre [DIA, ENTRADA-1]
-                    if _cabe_en_estab(estab_stock, dia_recepcion, entrada - pd.Timedelta(days=1), unds, ESTAB_CAP):
+                    if _cabe_en_estab(estab_stock, dia_recepcion, entrada - pd.Timedelta(days=1), unds, estab_cap):
 
                         # 3) Calcular SALIDA + ajustes
                         salida = entrada + timedelta(days=dias_sal_optimos)
@@ -303,7 +304,7 @@ if uploaded_file is not None:
 
     # Botón de planificación
     if st.button("🚀 Aplicar planificación"):
-        df_planificado = planificar_filas_na(df, dias_max_almacen_global, dias_max_por_producto)
+        df_planificado = planificar_filas_na(df, dias_max_almacen_global, dias_max_por_producto, estab_cap)
         st.session_state["df_planificado"] = df_planificado
         st.success("✅ Planificación aplicada a filas vacías.")
 
@@ -469,16 +470,16 @@ if uploaded_file is not None:
         # ===============================
         # 📦 Estabilización: tabla + gráfico + descarga
         # ===============================
-        df_estab = calcular_estabilizacion_diaria(df_editable, ESTAB_CAP)
+        df_estab = calcular_estabilizacion_diaria(df_editable, estab_cap)
 
         with st.expander("📦 Ocupación diaria de cámara de estabilización", expanded=True):
             if df_estab.empty:
                 st.info("No hay días con stock en estabilización.")
             else:
-                # Tabla SIN columna AL_DIA_SIGUIENTE
+                # Tabla SIN columna AL_DIA_SIGUIENTE (si quisieras quitarla, haz un drop)
                 st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
-                colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > ESTAB_CAP else "teal")
+                colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > estab_cap else "teal")
 
                 fig_est = go.Figure()
                 fig_est.add_trace(go.Bar(
@@ -486,7 +487,7 @@ if uploaded_file is not None:
                     y=df_estab["ESTAB_UNDS"],
                     marker_color=colores,
                     hovertemplate="Fecha: %{x|%Y-%m-%d}<br>Unds: %{y}<extra></extra>",
-                    showlegend=False   # ❌ sin leyenda
+                    showlegend=False
                 ))
                 fig_est.add_trace(go.Scatter(
                     x=df_estab["FECHA"],
@@ -497,15 +498,15 @@ if uploaded_file is not None:
                     showlegend=False
                 ))
                 fig_est.add_hline(
-                    y=ESTAB_CAP, line_dash="dash", line_color="orange",
-                    annotation_text=f"Capacidad: {ESTAB_CAP}",
+                    y=estab_cap, line_dash="dash", line_color="orange",
+                    annotation_text=f"Capacidad: {estab_cap}",
                     annotation_position="top left"
                 )
                 fig_est.update_layout(
                     xaxis_title="Fecha",
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
-                    showlegend=False  # ❌ aseguramos sin leyenda
+                    showlegend=False
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
@@ -530,9 +531,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
-
-
-
-
