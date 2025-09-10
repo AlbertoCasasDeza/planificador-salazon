@@ -685,6 +685,11 @@ if uploaded_file is not None:
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
                     showlegend=False      # <- sin leyenda
+                    xaxis=dict(
+                        tickmode="array",
+                        tickvals=df_estab["FECHA"],
+                        tickformat="%d %b (%a)"   # 👈 formato: 11 Sep (Thu)
+                    )
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
@@ -709,4 +714,5 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
