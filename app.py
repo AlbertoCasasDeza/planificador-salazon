@@ -329,7 +329,7 @@ if uploaded_file is not None:
     dias_max_por_producto = {}
     if "PRODUCTO" in df.columns:
         productos = sorted(df["PRODUCTO"].dropna().astype(str).unique().tolist())
-        st.sidebar.markdown("### ⏱️ Días máx. almacenamiento por PRODUCTO")
+        st.sidebar.markdown("### ⏱️ Días máx. envejecimiento por PRODUCTO")
 
         # Inicializa/actualiza tabla de overrides si cambian los productos
         if "overrides_df" not in st.session_state or set(st.session_state.get("productos_cache", [])) != set(productos):
@@ -714,6 +714,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
