@@ -12,15 +12,15 @@ st.title("🧠 Planificador de Lotes Salazón Naturiber")
 # Panel de configuración (globales)
 # -------------------------------
 st.sidebar.header("Parámetros de planificación")
-capacidad1 = st.sidebar.number_input("Capacidad máxima (1er intento)", value=3100, step=100)
-capacidad2 = st.sidebar.number_input("Capacidad máxima (2º intento)", value=3500, step=100)
+capacidad1 = st.sidebar.number_input("Capacidad máx. GENERAL (1er intento)", value=3100, step=100)
+capacidad2 = st.sidebar.number_input("Capacidad máx. GENERAL (2º intento)", value=3500, step=100)
 
 # Límite GLOBAL en días naturales entre DIA (recepción) y ENTRADA_SAL
-dias_max_almacen_global = st.sidebar.number_input("Días máx. almacenamiento (GLOBAL)", value=5, step=1)
+dias_max_almacen_global = st.sidebar.number_input("Días máx. envejecimiento GENERAL", value=5, step=1)
 
 # Capacidad de estabilización en el sidebar (valor base)
 estab_cap = st.sidebar.number_input(
-    "Capacidad cámara de estabilización (unds)",
+    "Capacidad máx. ESTABILIZACIÓN GENERAL",
     value=4700, step=100, min_value=0
 )
 
@@ -414,7 +414,7 @@ if uploaded_file is not None:
     )
 
     # ---- Overrides de capacidad por FECHA: ESTABILIZACIÓN ----
-    st.sidebar.markdown("### 📅 Capacidad ESTABILIZACIÓN por día (opcional)")
+    st.sidebar.markdown("### 📅 Capacidad máx. ESTABILIZACIÓN por día (opcional)")
 
     if "cap_overrides_estab_df" not in st.session_state:
         st.session_state.cap_overrides_estab_df = pd.DataFrame({
@@ -714,6 +714,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
