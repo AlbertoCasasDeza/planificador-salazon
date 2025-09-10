@@ -18,7 +18,7 @@ capacidad2 = st.sidebar.number_input("Capacidad máxima (2º intento)", value=35
 # Límite GLOBAL en días naturales entre DIA (recepción) y ENTRADA_SAL
 dias_max_almacen_global = st.sidebar.number_input("Días máx. almacenamiento (GLOBAL)", value=5, step=1)
 
-# Capacidad de estabilización en el sidebar
+# Capacidad de estabilización en el sidebar (valor base)
 estab_cap = st.sidebar.number_input(
     "Capacidad cámara de estabilización (unds)",
     value=4700, step=100, min_value=0
@@ -52,7 +52,8 @@ uploaded_file = st.file_uploader("📂 Sube tu Excel con los lotes", type=["xlsx
 # Funciones auxiliares
 # -------------------------------
 def es_habil(fecha):
-    return fecha.weekday() < 5 and fecha not in dias_festivos
+    # Hábil si es lunes-viernes y no es festivo (comparando por fecha normalizada)
+    return fecha.weekday() < 5 and fecha.normalize() not in dias_festivos
 
 def siguiente_habil(fecha):
     f = fecha + timedelta(days=1)
@@ -74,25 +75,14 @@ def _sumar_en_rango(dic, fecha_ini, fecha_fin_inclusive, unds):
         d0 = d.normalize()
         dic[d0] = dic.get(d0, 0) + unds
 
-def _cabe_en_estab(dic, fecha_ini, fecha_fin_inclusive, unds, cap):
-    """Comprueba si al sumar 'unds' en cada fecha del rango se respetaría 'cap'."""
-    if pd.isna(fecha_ini) or pd.isna(fecha_fin_inclusive):
-        return True
-    if fecha_fin_inclusive < fecha_ini:
-        return True  # entra el mismo día -> no ocupa estabilización
-    for d in pd.date_range(fecha_ini, fecha_fin_inclusive, freq="D"):
-        d0 = d.normalize()
-        if dic.get(d0, 0) + unds > cap:
-            return False
-    return True
-
-def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFrame:
+def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int, estab_cap_overrides: dict | None = None) -> pd.DataFrame:
     """
     Calcula la ocupación diaria de la cámara de estabilización.
     Desglosa por tipo de producto:
       - Paleta: PRODUCTO empieza por 'P'
       - Jamón : PRODUCTO empieza por 'J'
     Un lote ocupa estabilización en los días naturales [DIA, ENTRADA_SAL - 1].
+    Permite overrides de capacidad por fecha.
     """
     carga_total  = {}
     carga_paleta = {}
@@ -134,9 +124,22 @@ def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int) -> pd.DataFr
     )
     df_estab["ESTAB_PALETA"] = df_estab["FECHA"].map(lambda d: int(carga_paleta.get(d.normalize(), 0)))
     df_estab["ESTAB_JAMON"]  = df_estab["FECHA"].map(lambda d: int(carga_jamon.get(d.normalize(), 0)))
-    df_estab["CAPACIDAD"]    = cap
-    df_estab["UTIL_%"]       = (df_estab["ESTAB_UNDS"] / cap * 100).round(1)
-    df_estab["EXCESO"]       = (df_estab["ESTAB_UNDS"] - cap).clip(lower=0).astype(int)
+
+    # Capacidad efectiva por fecha (override si existe)  # FIX: robusto sin int(None)
+    if estab_cap_overrides is None:
+        estab_cap_overrides = {}
+
+    def _cap_for_date(d):
+        if pd.isna(d):
+            return int(cap)
+        key = pd.to_datetime(d).normalize()
+        if key in estab_cap_overrides:
+            return int(estab_cap_overrides[key])
+        return int(cap)
+
+    df_estab["CAPACIDAD"] = df_estab["FECHA"].apply(_cap_for_date)
+    df_estab["UTIL_%"] = (df_estab["ESTAB_UNDS"] / df_estab["CAPACIDAD"] * 100).round(1)
+    df_estab["EXCESO"] = (df_estab["ESTAB_UNDS"] - df_estab["CAPACIDAD"]).clip(lower=0).astype(int)
 
     df_estab = df_estab[
         ["FECHA", "ESTAB_UNDS", "ESTAB_PALETA", "ESTAB_JAMON",
@@ -151,7 +154,7 @@ def generar_excel(df_out):
     return output
 
 # -------------------------------
-# Planificador (GLOBAL, overrides por PRODUCTO y estabilización + overrides por FECHA entrada/salida)
+# Planificador (GLOBAL, overrides por PRODUCTO y estabilización + overrides por FECHA entrada/salida/estab)
 # -------------------------------
 def planificar_filas_na(
     df_plan,
@@ -159,7 +162,8 @@ def planificar_filas_na(
     dias_max_por_producto,
     estab_cap,
     cap_overrides_ent,
-    cap_overrides_sal
+    cap_overrides_sal,
+    estab_cap_overrides
 ):
     df_corr = df_plan.copy()
 
@@ -197,6 +201,24 @@ def planificar_filas_na(
                 return int(ov["CAP2"])
         return capacidad1 if attempt == 1 else capacidad2
 
+    # Capacidad de estabilización por día (override si existe)
+    def get_estab_cap(date_dt):
+        dkey = pd.to_datetime(date_dt).normalize()
+        ov = estab_cap_overrides.get(dkey)
+        return ov if (ov is not None and pd.notna(ov)) else estab_cap
+
+    # Chequeo de capacidad de estabilización en rango [ini, fin]
+    def cabe_en_estab_rango(fecha_ini, fecha_fin_inclusive, unds):
+        if pd.isna(fecha_ini) or pd.isna(fecha_fin_inclusive):
+            return True
+        if fecha_fin_inclusive < fecha_ini:
+            return True
+        for d in pd.date_range(fecha_ini, fecha_fin_inclusive, freq="D"):
+            d0 = d.normalize()
+            if estab_stock.get(d0, 0) + unds > get_estab_cap(d0):
+                return False
+        return True
+
     # Solo filas con ENTRADA_SAL NaT
     for idx, row in df_corr[df_corr["ENTRADA_SAL"].isna()].iterrows():
         dia_recepcion    = row["DIA"]
@@ -221,8 +243,8 @@ def planificar_filas_na(
                 cap_ent_dia = get_cap_ent(entrada, attempt)
                 if carga_entrada.get(entrada, 0) + unds <= cap_ent_dia:
 
-                    # 2) Capacidad estabilización entre [DIA, ENTRADA-1]
-                    if _cabe_en_estab(estab_stock, dia_recepcion, entrada - pd.Timedelta(days=1), unds, estab_cap):
+                    # 2) Capacidad estabilización entre [DIA, ENTRADA-1] con overrides diarios
+                    if cabe_en_estab_rango(dia_recepcion, entrada - pd.Timedelta(days=1), unds):
 
                         # 3) Calcular SALIDA + ajustes
                         salida = entrada + timedelta(days=dias_sal_optimos)
@@ -231,7 +253,7 @@ def planificar_filas_na(
                                 salida = anterior_habil(salida)
                             elif salida.weekday() == 6:
                                 salida = siguiente_habil(salida)
-                        if ajuste_festivos and (salida in dias_festivos):
+                        if ajuste_festivos and (salida.normalize() in dias_festivos):
                             dia_semana = salida.weekday()
                             if dia_semana == 0:
                                 salida = siguiente_habil(salida)
@@ -256,7 +278,7 @@ def planificar_filas_na(
 
                             # actualizar cargas día
                             carga_entrada[entrada] = carga_entrada.get(entrada, 0) + unds
-                            carga_salida[salida]   = carga_salida.get(salida, 0)   + unds
+                            carga_salida[salida]   = carga_salida.get(salida, 0) + unds
 
                             # actualizar ocupación en estabilización [DIA, ENTRADA-1]
                             if entrada.date() > dia_recepcion.date():
@@ -321,7 +343,7 @@ if uploaded_file is not None:
             st.session_state.overrides_df,
             use_container_width=True,
             num_rows="dynamic",
-            disabled={"PRODUCTO": True},
+            disabled=["PRODUCTO"],  # proteger columna producto
             column_config={
                 "PRODUCTO": st.column_config.TextColumn("PRODUCTO"),
                 "DIAS_MAX_ALMACEN": st.column_config.NumberColumn("Días máx. naturales", step=1, min_value=0)
@@ -333,17 +355,15 @@ if uploaded_file is not None:
     else:
         st.sidebar.info("No se encontró columna PRODUCTO. Se aplicará solo el límite GLOBAL.")
 
-    # ---- Overrides de capacidad por FECHA (separados ENTRADA y SALIDA, opcionales) ----
-    st.sidebar.markdown("### 📅 Capacidad máx. ENTRADA por día (opcional)")
+    # ---- Overrides de capacidad por FECHA: ENTRADA ----
+    st.sidebar.markdown("### 📅 Overrides capacidad ENTRADA (opcional)")
 
-    # Inicializa con dtypes correctos
     if "cap_overrides_ent_df" not in st.session_state:
         st.session_state.cap_overrides_ent_df = pd.DataFrame({
             "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]")),
             "CAP1":  pd.Series([], dtype="Int64"),
             "CAP2":  pd.Series([], dtype="Int64"),
         })
-    # Asegura dtypes por si venían mal
     st.session_state.cap_overrides_ent_df["FECHA"] = pd.to_datetime(
         st.session_state.cap_overrides_ent_df["FECHA"], errors="coerce"
     )
@@ -357,14 +377,15 @@ if uploaded_file is not None:
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "FECHA": st.column_config.DateColumn("Fecha (entrada)"),
+            "FECHA": st.column_config.DateColumn("Fecha (entrada)", format="YYYY-MM-DD"),
             "CAP1": st.column_config.NumberColumn("Capacidad 1º intento", step=50, min_value=0),
             "CAP2": st.column_config.NumberColumn("Capacidad 2º intento", step=50, min_value=0),
         },
         key="cap_overrides_ent_editor"
     )
 
-    st.sidebar.markdown("### 📅 Capacidad máx. SALIDA por día (opcional)")
+    # ---- Overrides de capacidad por FECHA: SALIDA ----
+    st.sidebar.markdown("### 📅 Overrides capacidad SALIDA (opcional)")
 
     if "cap_overrides_sal_df" not in st.session_state:
         st.session_state.cap_overrides_sal_df = pd.DataFrame({
@@ -385,11 +406,38 @@ if uploaded_file is not None:
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "FECHA": st.column_config.DateColumn("Fecha (salida)"),
+            "FECHA": st.column_config.DateColumn("Fecha (salida)", format="YYYY-MM-DD"),
             "CAP1": st.column_config.NumberColumn("Capacidad 1º intento", step=50, min_value=0),
             "CAP2": st.column_config.NumberColumn("Capacidad 2º intento", step=50, min_value=0),
         },
         key="cap_overrides_sal_editor"
+    )
+
+    # ---- Overrides de capacidad por FECHA: ESTABILIZACIÓN ----
+    st.sidebar.markdown("### 📅 Overrides capacidad ESTABILIZACIÓN (opcional)")
+
+    if "cap_overrides_estab_df" not in st.session_state:
+        st.session_state.cap_overrides_estab_df = pd.DataFrame({
+            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]")),
+            "CAP":   pd.Series([], dtype="Int64"),
+        })
+    # Asegura dtypes
+    st.session_state.cap_overrides_estab_df["FECHA"] = pd.to_datetime(
+        st.session_state.cap_overrides_estab_df["FECHA"], errors="coerce"
+    )
+    st.session_state.cap_overrides_estab_df["CAP"] = pd.to_numeric(
+        st.session_state.cap_overrides_estab_df["CAP"], errors="coerce"
+    ).astype("Int64")
+
+    cap_overrides_estab_df = st.sidebar.data_editor(
+        st.session_state.cap_overrides_estab_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "FECHA": st.column_config.DateColumn("Fecha (estabilización)", format="YYYY-MM-DD"),
+            "CAP":   st.column_config.NumberColumn("Capacidad estabilización (unds)", step=50, min_value=0),
+        },
+        key="cap_overrides_estab_editor"
     )
 
     # Normaliza a dicts con clave fecha-normalizada
@@ -415,11 +463,21 @@ if uploaded_file is not None:
             }
     st.session_state.cap_overrides_sal_df = cap_overrides_sal_df
 
+    # FIX: no guardar None; si CAP está vacío, se ignora ese override
+    estab_cap_overrides = {}
+    if not cap_overrides_estab_df.empty:
+        tmp3 = cap_overrides_estab_df.dropna(subset=["FECHA"]).copy()
+        tmp3["FECHA"] = pd.to_datetime(tmp3["FECHA"]).dt.normalize()
+        for _, r in tmp3.iterrows():
+            if pd.notna(r["CAP"]):
+                estab_cap_overrides[r["FECHA"]] = int(r["CAP"])
+    st.session_state.cap_overrides_estab_df = cap_overrides_estab_df
+
     # Botón de planificación
     if st.button("🚀 Aplicar planificación"):
         df_planificado = planificar_filas_na(
             df, dias_max_almacen_global, dias_max_por_producto,
-            estab_cap, cap_overrides_ent, cap_overrides_sal
+            estab_cap, cap_overrides_ent, cap_overrides_sal, estab_cap_overrides
         )
         st.session_state["df_planificado"] = df_planificado
         st.success("✅ Planificación aplicada a filas vacías.")
@@ -427,12 +485,12 @@ if uploaded_file is not None:
     # Mostrar tabla editable, gráfico y estabilización después de planificar
     if "df_planificado" in st.session_state:
         df_show = st.session_state["df_planificado"]
-        # Column config más robusta: fecha / número / texto
+        # Column config: fecha / número / texto
         column_config = {}
         for col in df_show.columns:
             s = df_show[col]
             if pd.api.types.is_datetime64_any_dtype(s):
-                column_config[col] = st.column_config.DateColumn(col, disabled=False)
+                column_config[col] = st.column_config.DateColumn(col, format="YYYY-MM-DD", disabled=False)
             elif pd.api.types.is_numeric_dtype(s):
                 column_config[col] = st.column_config.NumberColumn(col, disabled=False)
             else:
@@ -474,7 +532,7 @@ if uploaded_file is not None:
             else pd.DataFrame()
         )
 
-        # Entradas (azul): apiladas por LOTE en offsetgroup "entrada"
+        # Entradas (azul)
         if not pivot_e.empty:
             for lote in pivot_e.columns:
                 y_vals = pivot_e[lote]
@@ -492,7 +550,7 @@ if uploaded_file is not None:
                         showlegend=True
                     ))
 
-        # Salidas (naranja): apiladas por LOTE en offsetgroup "salida"
+        # Salidas (naranja)
         if not pivot_s.empty:
             for lote in pivot_s.columns:
                 y_vals = pivot_s[lote]
@@ -510,7 +568,7 @@ if uploaded_file is not None:
                         showlegend=False
                     ))
 
-        # Etiquetas separadas con anotaciones en píxeles
+        # Etiquetas separadas
         label_shift = pd.Timedelta(hours=8)
         annotations = []
 
@@ -556,27 +614,26 @@ if uploaded_file is not None:
             for _, r in tot_s.iterrows():
                 add_two_labels(r["SALIDA_SAL"], r["UNDS"], r["LOTES"], is_entry=False)
 
-        # Eje X y leyenda con comportamiento requerido
         ticks = pd.Index(sorted(set(
             (pivot_e.index.tolist() if not pivot_e.empty else []) +
             (pivot_s.index.tolist() if not pivot_s.empty else [])
         )))
         fig.update_layout(
-            barmode="relative",  # apila por lote en cada grupo y muestra entrada/salida lado a lado
+            barmode="relative",
             xaxis_title="Fecha",
             yaxis_title="Unidades",
             xaxis=dict(
                 tickmode="array",
                 tickvals=ticks,
-                tickformat="%A, %-d %b"  # Inglés: Monday, 8 Sep
+                tickformat="%d %b (%a)"
             ),
             bargap=0.25,
             bargroupgap=0.12,
             annotations=annotations,
             legend=dict(
-                itemclick="toggleothers",      # click -> deja solo ese lote
-                itemdoubleclick="toggle",      # doble click -> alterna normal
-                groupclick="togglegroup"       # controla entrada + salida del lote a la vez
+                itemclick="toggleothers",
+                itemdoubleclick="toggle",
+                groupclick="togglegroup"
             )
         )
         fig.update_yaxes(range=[0, max_y * 1.25])
@@ -586,16 +643,19 @@ if uploaded_file is not None:
         # ===============================
         # 📦 Estabilización: tabla + gráfico + descarga
         # ===============================
-        df_estab = calcular_estabilizacion_diaria(df_editable, estab_cap)
+        df_estab = calcular_estabilizacion_diaria(df_editable, estab_cap, estab_cap_overrides)
 
         with st.expander("📦 Ocupación diaria de cámara de estabilización", expanded=True):
             if df_estab.empty:
                 st.info("No hay días con stock en estabilización.")
             else:
-                # Tabla (sin columna AL_DIA_SIGUIENTE)
                 st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
-                colores = df_estab["ESTAB_UNDS"].apply(lambda v: "crimson" if v > estab_cap else "teal")
+                # Colores por exceso relativo a la capacidad del día
+                colores = df_estab.apply(
+                    lambda r: "crimson" if r["ESTAB_UNDS"] > r["CAPACIDAD"] else "teal",
+                    axis=1
+                )
 
                 fig_est = go.Figure()
                 fig_est.add_trace(go.Bar(
@@ -614,16 +674,19 @@ if uploaded_file is not None:
                     textposition="top center",
                     showlegend=False
                 ))
-                fig_est.add_hline(
-                    y=estab_cap, line_dash="dash", line_color="orange",
-                    annotation_text=f"Capacidad: {estab_cap}",
-                    annotation_position="top left"
-                )
+                # Línea de capacidad efectiva por fecha (admite overrides)
+                fig_est.add_trace(go.Scatter(
+                    x=df_estab["FECHA"],
+                    y=df_estab["CAPACIDAD"],
+                    mode="lines",
+                    name="Capacidad estabilización",
+                    hovertemplate="Capacidad: %{y}<extra></extra>"
+                ))
                 fig_est.update_layout(
                     xaxis_title="Fecha",
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
-                    showlegend=False
+                    showlegend=True
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
 
