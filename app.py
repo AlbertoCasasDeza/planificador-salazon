@@ -11,7 +11,7 @@ st.title("🧠 Planificador de Lotes Salazón Naturiber")
 # -------------------------------
 # Parámetros fijos (no visibles)
 # -------------------------------
-ESTAB_CAP = 3500  # capacidad diaria de la cámara de estabilización (unds)
+ESTAB_CAP = 4500  # capacidad diaria de la cámara de estabilización (unds)
 
 # -------------------------------
 # Panel de configuración (globales)
@@ -530,6 +530,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
