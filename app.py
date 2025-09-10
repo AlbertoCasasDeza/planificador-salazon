@@ -414,7 +414,7 @@ if uploaded_file is not None:
     )
 
     # ---- Overrides de capacidad por FECHA: ESTABILIZACIÓN ----
-    st.sidebar.markdown("### 📅 Overrides capacidad ESTABILIZACIÓN (opcional)")
+    st.sidebar.markdown("### 📅 Capacidad ESTABILIZACIÓN por día (opcional)")
 
     if "cap_overrides_estab_df" not in st.session_state:
         st.session_state.cap_overrides_estab_df = pd.DataFrame({
@@ -714,6 +714,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
