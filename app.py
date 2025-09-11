@@ -229,164 +229,193 @@ def planificar_filas_na(
                 return False
         return True
     # ============================================================
-    # REGLA ESPECIAL: PRODUCTO "JBSPRCLC-MEX" -> misma ENTRADA para todos (si no está ya planificada)
+    # REGLAS ESPECIALES DE ENTRADA COMÚN
+    # - Grupo A (único): ["JBSPRCLC-MEX"]  -> todos ese código al mismo día
+    # - Grupo B (conjunto): ["JCIVRPORCISAN", "PCIVRPORCISAN"] -> MISMO día para ambos
+    #   Si no cabe conjuntamente, cae a intentar cada código por separado.
     # ============================================================
-    special_code = "JBSPRCLC-MEX"
-    if "PRODUCTO" in df_corr.columns:
-        mask_special = (df_corr["PRODUCTO"].astype(str) == special_code) & (df_corr["ENTRADA_SAL"].isna())
-        # Si hay lotes de este producto sin entrada aún
-        if mask_special.any():
-            pending = df_corr.loc[mask_special].copy()
+    def _aplicar_entrada_comun_para_grupo(codigos, marcar_si_falla=False):
+        """
+        Intenta asignar un ÚNICO día de ENTRADA para todos los lotes pendientes de 'codigos'.
+        Si no es posible y 'marcar_si_falla' es True, marca LOTE_NO_ENCAJA="Sí".
+        Si es posible, asigna ENTRADA/SALIDA y actualiza cargas/stock.
+        Devuelve True si asignó día común, False si no.
+        """
+        if "PRODUCTO" not in df_corr.columns:
+            return False
 
-            # Si ya hay lotes de este producto con ENTRADA planificada, intentamos usar esa fecha preferente
-            fechas_existentes = sorted(
-                df_corr.loc[(df_corr["PRODUCTO"].astype(str) == special_code) & (df_corr["ENTRADA_SAL"].notna()), "ENTRADA_SAL"].dt.normalize().unique().tolist()
-            )
-            fecha_preferente = fechas_existentes[0] if len(fechas_existentes) > 0 else None
+        # Lotes pendientes del grupo (sin ENTRADA aún)
+        mask_group = df_corr["PRODUCTO"].astype(str).isin(codigos) & df_corr["ENTRADA_SAL"].isna()
+        if not mask_group.any():
+            return False
+        pending = df_corr.loc[mask_group].copy()
 
-            # Rango común permitido por almacenamiento (intersección de todos los lotes)
-            inicios = []
-            limites = []
-            for _, r in pending.iterrows():
-                dia_recepcion = r["DIA"]
-                prod = r["PRODUCTO"] if "PRODUCTO" in df_corr.columns else None
-                dias_max_almacen = dias_max_por_producto.get(prod, dias_max_almacen_global)
-                entrada_ini_i = dia_recepcion if es_habil(dia_recepcion) else siguiente_habil(dia_recepcion)
-                limite_i = dia_recepcion + pd.Timedelta(days=int(dias_max_almacen))
-                inicios.append(entrada_ini_i.normalize())
-                limites.append(limite_i.normalize())
-            if len(inicios) > 0:
-                inicio_comun = max(inicios)
-                limite_comun = min(limites)
-            else:
-                inicio_comun = None
-                limite_comun = None
+        # Preferencia: si ya existen lotes del grupo con ENTRADA asignada, probar primero esa fecha
+        fechas_existentes = sorted(
+            df_corr.loc[
+                df_corr["PRODUCTO"].astype(str).isin(codigos) & df_corr["ENTRADA_SAL"].notna(),
+                "ENTRADA_SAL"
+            ].dt.normalize().unique().tolist()
+        )
+        fecha_preferente = fechas_existentes[0] if len(fechas_existentes) > 0 else None
 
-            # Función para evaluar si una fecha candidata d es factible para TODOS los lotes pendientes
-            def _es_factible_entrada_comun(d, attempt):
-                if d is None:
-                    return False
-                d = pd.to_datetime(d).normalize()
-                # 1) ENTRADA capacidad total ese día (suma UNDS de todos los pendientes)
-                total_unds = int(pending["UNDS"].sum())
-                if carga_entrada.get(d, 0) + total_unds > get_cap_ent(d, attempt):
-                    return False
+        # Intersección de ventanas permitidas por almacenamiento (de TODOS los lotes del grupo)
+        inicios, limites = [], []
+        for _, r in pending.iterrows():
+            dia_recepcion = r["DIA"]
+            prod = r["PRODUCTO"]
+            dias_max_almacen = dias_max_por_producto.get(prod, dias_max_almacen_global)
+            entrada_ini_i = dia_recepcion if es_habil(dia_recepcion) else siguiente_habil(dia_recepcion)
+            limite_i = dia_recepcion + pd.Timedelta(days=int(dias_max_almacen))
+            inicios.append(entrada_ini_i.normalize())
+            limites.append(limite_i.normalize())
 
-                # 2) ESTABILIZACIÓN capacidad por día para TODOS los pendientes (simulación conjunta)
-                sim_stock = dict(estab_stock)  # copia
-                for _, r in pending.iterrows():
-                    dia_rec = r["DIA"]
-                    unds = int(r["UNDS"])
-                    if d.date() > dia_rec.date():
-                        for k in pd.date_range(dia_rec.normalize(), (d - pd.Timedelta(days=1)).normalize(), freq="D"):
-                            k0 = k.normalize()
-                            # capacidad efectiva del día (con overrides)
-                            if sim_stock.get(k0, 0) + unds > get_estab_cap(k0):
-                                return False
-                            sim_stock[k0] = sim_stock.get(k0, 0) + unds
+        if not inicios:
+            return False
 
-                # 3) SALIDA capacidad por día (cada lote puede salir en fecha distinta)
-                add_salida = {}
-                for _, r in pending.iterrows():
-                    unds = int(r["UNDS"])
-                    dias_sal_optimos = int(r["DIAS_SAL_OPTIMOS"])
-                    salida = d + timedelta(days=dias_sal_optimos)
-                    # ajustes
-                    if ajuste_finde:
-                        if salida.weekday() == 5:
-                            salida = anterior_habil(salida)
-                        elif salida.weekday() == 6:
-                            salida = siguiente_habil(salida)
-                    if ajuste_festivos and (salida.normalize() in dias_festivos):
-                        dia_semana = salida.weekday()
-                        if dia_semana == 0:
-                            salida = siguiente_habil(salida)
-                        elif dia_semana in [1, 2, 3]:
-                            anterior = anterior_habil(salida)
-                            siguiente = siguiente_habil(salida)
-                            carga_ant = carga_salida.get(anterior, 0) + add_salida.get(anterior, 0)
-                            carga_sig = carga_salida.get(siguiente, 0) + add_salida.get(siguiente, 0)
-                            salida = anterior if carga_ant <= carga_sig else siguiente
-                        elif dia_semana == 4:
-                            salida = anterior_habil(salida)
-                    add_salida[salida] = add_salida.get(salida, 0) + unds
-
-                # verificar capacidad por día de salida
-                for sfecha, suma_unds in add_salida.items():
-                    if carga_salida.get(sfecha, 0) + suma_unds > get_cap_sal(sfecha, attempt):
-                        return False
-
-                return True
-
-            # Estrategia de búsqueda:
-            # 1) Si hay fecha_preferente y cae dentro del rango común permitido, se prueba primero.
-            # 2) Si no, se busca desde inicio_comun hasta limite_comun por días hábiles.
-            entrada_elegida = None
-            for attempt in [1, 2]:
-                candidatos = []
-                if fecha_preferente is not None:
-                    if (inicio_comun is None) or (fecha_preferente >= inicio_comun and fecha_preferente <= limite_comun):
-                        candidatos.append(fecha_preferente.normalize())
-                # añadir barrido dentro del rango común
-                if inicio_comun is not None and limite_comun is not None:
-                    d = inicio_comun
-                    # asegurar día hábil de inicio
-                    if not es_habil(d):
-                        d = siguiente_habil(d)
-                    while d <= limite_comun:
-                        if d not in candidatos:
-                            candidatos.append(d)
-                        d = siguiente_habil(d)
-                # evaluar candidatos
-                for d in candidatos:
-                    if _es_factible_entrada_comun(d, attempt):
-                        entrada_elegida = d
-                        break
-                if entrada_elegida is not None:
-                    break
-
-            # Si se encontró fecha común, se asigna a todos los pendientes y se actualizan cargas/stock
-            if entrada_elegida is not None:
-                for idxp, r in pending.iterrows():
-                    dia_recepcion = r["DIA"]
-                    unds = int(r["UNDS"])
-                    dias_sal_optimos = int(r["DIAS_SAL_OPTIMOS"])
-                    # asignación
-                    df_corr.at[idxp, "ENTRADA_SAL"] = entrada_elegida
-                    # salida individual con ajustes
-                    salida = entrada_elegida + timedelta(days=dias_sal_optimos)
-                    if ajuste_finde:
-                        if salida.weekday() == 5:
-                            salida = anterior_habil(salida)
-                        elif salida.weekday() == 6:
-                            salida = siguiente_habil(salida)
-                    if ajuste_festivos and (salida.normalize() in dias_festivos):
-                        dia_semana = salida.weekday()
-                        if dia_semana == 0:
-                            salida = siguiente_habil(salida)
-                        elif dia_semana in [1, 2, 3]:
-                            anterior = anterior_habil(salida)
-                            siguiente = siguiente_habil(salida)
-                            carga_ant = carga_salida.get(anterior, 0)
-                            carga_sig = carga_salida.get(siguiente, 0)
-                            salida = anterior if carga_ant <= carga_sig else siguiente
-                        elif dia_semana == 4:
-                            salida = anterior_habil(salida)
-                    df_corr.at[idxp, "SALIDA_SAL"] = salida
-                    df_corr.at[idxp, "DIAS_SAL"] = (salida - entrada_elegida).days
-                    df_corr.at[idxp, "DIAS_ALMACENADOS"] = (entrada_elegida - dia_recepcion).days
-                    df_corr.at[idxp, "LOTE_NO_ENCAJA"] = "No"
-
-                    # actualizar cargas y stock
-                    carga_entrada[entrada_elegida] = carga_entrada.get(entrada_elegida, 0) + unds
-                    carga_salida[salida] = carga_salida.get(salida, 0) + unds
-                    if entrada_elegida.date() > dia_recepcion.date():
-                        _sumar_en_rango(estab_stock, dia_recepcion, entrada_elegida - pd.Timedelta(days=1), unds)
-
-            else:
-                # si no se encontró fecha común factible, marcamos como no encaja (pero no bloquea el resto del plan)
+        inicio_comun = max(inicios)
+        limite_comun = min(limites)
+        if inicio_comun > limite_comun:
+            if marcar_si_falla:
                 for idxp, _ in pending.iterrows():
                     df_corr.at[idxp, "LOTE_NO_ENCAJA"] = "Sí"
+            return False
+
+        # ¿Cabe TODO el grupo en la misma fecha d?
+        def _es_factible_entrada_comun(d, attempt):
+            if d is None:
+                return False
+            d = pd.to_datetime(d).normalize()
+
+            # 1) Capacidad ENTRADA del día d (suma de UNDS del grupo)
+            total_unds = int(pending["UNDS"].sum())
+            if carga_entrada.get(d, 0) + total_unds > get_cap_ent(d, attempt):
+                return False
+
+            # 2) Capacidad ESTABILIZACIÓN [DIA, d-1] para cada lote (simulación conjunta)
+            sim_stock = dict(estab_stock)
+            for _, r in pending.iterrows():
+                dia_rec = r["DIA"]
+                unds_i = int(r["UNDS"])
+                if d.date() > dia_rec.date():
+                    for k in pd.date_range(dia_rec.normalize(), (d - pd.Timedelta(days=1)).normalize(), freq="D"):
+                        k0 = k.normalize()
+                        if sim_stock.get(k0, 0) + unds_i > get_estab_cap(k0):
+                            return False
+                        sim_stock[k0] = sim_stock.get(k0, 0) + unds_i
+
+            # 3) Capacidad SALIDA (cada lote con su fecha tras ajustes)
+            add_salida = {}
+            for _, r in pending.iterrows():
+                unds_i = int(r["UNDS"])
+                dias_sal_optimos = int(r["DIAS_SAL_OPTIMOS"])
+                salida = d + timedelta(days=dias_sal_optimos)
+                # ajustes
+                if ajuste_finde:
+                    if salida.weekday() == 5:
+                        salida = anterior_habil(salida)
+                    elif salida.weekday() == 6:
+                        salida = siguiente_habil(salida)
+                if ajuste_festivos and (salida.normalize() in dias_festivos):
+                    dia_semana = salida.weekday()
+                    if dia_semana == 0:
+                        salida = siguiente_habil(salida)
+                    elif dia_semana in [1, 2, 3]:
+                        anterior = anterior_habil(salida)
+                        siguiente = siguiente_habil(salida)
+                        carga_ant = carga_salida.get(anterior, 0) + add_salida.get(anterior, 0)
+                        carga_sig = carga_salida.get(siguiente, 0) + add_salida.get(siguiente, 0)
+                        salida = anterior if carga_ant <= carga_sig else siguiente
+                    elif dia_semana == 4:
+                        salida = anterior_habil(salida)
+                add_salida[salida] = add_salida.get(salida, 0) + unds_i
+
+            # verificar capacidad por día de salida
+            for sfecha, suma_unds in add_salida.items():
+                if carga_salida.get(sfecha, 0) + suma_unds > get_cap_sal(sfecha, attempt):
+                    return False
+
+            return True
+
+        # Buscar fecha: preferente si cabe, si no barrer dentro de la intersección
+        entrada_elegida = None
+        for attempt in [1, 2]:
+            candidatos = []
+            if fecha_preferente is not None:
+                if (fecha_preferente >= inicio_comun) and (fecha_preferente <= limite_comun):
+                    candidatos.append(pd.to_datetime(fecha_preferente).normalize())
+            # Barrido hábil
+            d = inicio_comun
+            if not es_habil(d):
+                d = siguiente_habil(d)
+            while d <= limite_comun:
+                if d not in candidatos:
+                    candidatos.append(d)
+                d = siguiente_habil(d)
+
+            for d in candidatos:
+                if _es_factible_entrada_comun(d, attempt):
+                    entrada_elegida = d
+                    break
+            if entrada_elegida is not None:
+                break
+
+        # Asignación si se encontró fecha común
+        if entrada_elegida is not None:
+            for idxp, r in pending.iterrows():
+                dia_recepcion = r["DIA"]
+                unds_i = int(r["UNDS"])
+                dias_sal_optimos = int(r["DIAS_SAL_OPTIMOS"])
+
+                df_corr.at[idxp, "ENTRADA_SAL"] = entrada_elegida
+                salida = entrada_elegida + timedelta(days=dias_sal_optimos)
+                if ajuste_finde:
+                    if salida.weekday() == 5:
+                        salida = anterior_habil(salida)
+                    elif salida.weekday() == 6:
+                        salida = siguiente_habil(salida)
+                if ajuste_festivos and (salida.normalize() in dias_festivos):
+                    dia_semana = salida.weekday()
+                    if dia_semana == 0:
+                        salida = siguiente_habil(salida)
+                    elif dia_semana in [1, 2, 3]:
+                        anterior = anterior_habil(salida)
+                        siguiente = siguiente_habil(salida)
+                        carga_ant = carga_salida.get(anterior, 0)
+                        carga_sig = carga_salida.get(siguiente, 0)
+                        salida = anterior if carga_ant <= carga_sig else siguiente
+                    elif dia_semana == 4:
+                        salida = anterior_habil(salida)
+
+                df_corr.at[idxp, "SALIDA_SAL"] = salida
+                df_corr.at[idxp, "DIAS_SAL"] = (salida - entrada_elegida).days
+                df_corr.at[idxp, "DIAS_ALMACENADOS"] = (entrada_elegida - dia_recepcion).days
+                df_corr.at[idxp, "LOTE_NO_ENCAJA"] = "No"
+
+                # actualizar cargas y stock
+                carga_entrada[entrada_elegida] = carga_entrada.get(entrada_elegida, 0) + unds_i
+                carga_salida[salida] = carga_salida.get(salida, 0) + unds_i
+                if entrada_elegida.date() > dia_recepcion.date():
+                    _sumar_en_rango(estab_stock, dia_recepcion, entrada_elegida - pd.Timedelta(days=1), unds_i)
+
+            return True  # éxito
+
+        # Si no se encontró fecha común
+        if marcar_si_falla:
+            for idxp, _ in pending.iterrows():
+                df_corr.at[idxp, "LOTE_NO_ENCAJA"] = "Sí"
+        return False
+
+    # --- Ejecutar reglas ---
+    # A) Código único: JBSPRCLC-MEX
+    _aplicar_entrada_comun_para_grupo(["JBSPRCLC-MEX"], marcar_si_falla=False)
+
+    # B) Conjunto: JCIVRPORCISAN + PCIVRPORCISAN (intento conjunto; si falla, intentar por separado)
+    exito_conjunto = _aplicar_entrada_comun_para_grupo(["JCIVRPORCISAN", "PCIVRPORCISAN"], marcar_si_falla=False)
+    if not exito_conjunto:
+        # Intento por separado (cada código su propio día común); sin marcar si falla.
+        _aplicar_entrada_comun_para_grupo(["JCIVRPORCISAN"], marcar_si_falla=False)
+        _aplicar_entrada_comun_para_grupo(["PCIVRPORCISAN"], marcar_si_falla=False)
 
     # Solo filas con ENTRADA_SAL NaT
     for idx, row in df_corr[df_corr["ENTRADA_SAL"].isna()].iterrows():
@@ -883,4 +912,5 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
