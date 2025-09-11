@@ -1,26 +1,34 @@
-    # app.py
+# app.py
 import pandas as pd
 import streamlit as st
 from datetime import timedelta
 import plotly.graph_objects as go
 from io import BytesIO
 
-st.set_page_config(page_title="Planificador Lotes NATURIBER", layout="wide")
-st.title("🧠 Planificador de Lotes Salazón NATURIBER")
+st.set_page_config(page_title="Planificador Lotes Naturiber", layout="wide")
+st.title("🧠 Planificador de Lotes Salazón Naturiber")
 
 # -------------------------------
 # Panel de configuración (globales)
 # -------------------------------
 st.sidebar.header("Parámetros de planificación")
-capacidad1 = st.sidebar.number_input("Capacidad máx. ENTRADA/SALIDA GENERAL (1er intento)", value=3100, step=100)
-capacidad2 = st.sidebar.number_input("Capacidad máx. ENTRADA/SALIDA GENERAL (2º intento)", value=3500, step=100)
+
+# Capacidad global ENTRADA
+st.sidebar.subheader("Capacidad global · ENTRADA")
+cap_ent_1 = st.sidebar.number_input("Entrada · 1º intento", value=3100, step=100, min_value=0)
+cap_ent_2 = st.sidebar.number_input("Entrada · 2º intento", value=3500, step=100, min_value=0)
+
+# Capacidad global SALIDA
+st.sidebar.subheader("Capacidad global · SALIDA")
+cap_sal_1 = st.sidebar.number_input("Salida · 1º intento", value=3100, step=100, min_value=0)
+cap_sal_2 = st.sidebar.number_input("Salida · 2º intento", value=3500, step=100, min_value=0)
 
 # Límite GLOBAL en días naturales entre DIA (recepción) y ENTRADA_SAL
-dias_max_almacen_global = st.sidebar.number_input("Días máx. envejecimiento GENERAL", value=5, step=1)
+dias_max_almacen_global = st.sidebar.number_input("Días máx. almacenamiento (GLOBAL)", value=5, step=1)
 
-# Capacidad de estabilización en el sidebar (valor base)
+# Capacidad de estabilización (valor base)
 estab_cap = st.sidebar.number_input(
-    "Capacidad máx. ESTABILIZACIÓN GENERAL",
+    "Capacidad cámara de estabilización (unds)",
     value=4700, step=100, min_value=0
 )
 
@@ -125,7 +133,7 @@ def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int, estab_cap_ov
     df_estab["ESTAB_PALETA"] = df_estab["FECHA"].map(lambda d: int(carga_paleta.get(d.normalize(), 0)))
     df_estab["ESTAB_JAMON"]  = df_estab["FECHA"].map(lambda d: int(carga_jamon.get(d.normalize(), 0)))
 
-    # Capacidad efectiva por fecha (override si existe)  # FIX: robusto sin int(None)
+    # Capacidad efectiva por fecha (override si existe) — robusto sin int(None)
     if estab_cap_overrides is None:
         estab_cap_overrides = {}
 
@@ -189,7 +197,8 @@ def planificar_filas_na(
                 return int(ov["CAP1"])
             if attempt == 2 and pd.notna(ov.get("CAP2")):
                 return int(ov["CAP2"])
-        return capacidad1 if attempt == 1 else capacidad2
+        # DEFAULT GLOBAL si no hay override por fecha
+        return cap_ent_1 if attempt == 1 else cap_ent_2
 
     def get_cap_sal(date_dt, attempt):
         dkey = pd.to_datetime(date_dt).normalize()
@@ -199,7 +208,8 @@ def planificar_filas_na(
                 return int(ov["CAP1"])
             if attempt == 2 and pd.notna(ov.get("CAP2")):
                 return int(ov["CAP2"])
-        return capacidad1 if attempt == 1 else capacidad2
+        # DEFAULT GLOBAL si no hay override por fecha
+        return cap_sal_1 if attempt == 1 else cap_sal_2
 
     # Capacidad de estabilización por día (override si existe)
     def get_estab_cap(date_dt):
@@ -329,7 +339,7 @@ if uploaded_file is not None:
     dias_max_por_producto = {}
     if "PRODUCTO" in df.columns:
         productos = sorted(df["PRODUCTO"].dropna().astype(str).unique().tolist())
-        st.sidebar.markdown("### ⏱️ Días máx. envejecimiento por PRODUCTO")
+        st.sidebar.markdown("### ⏱️ Días máx. almacenamiento por PRODUCTO")
 
         # Inicializa/actualiza tabla de overrides si cambian los productos
         if "overrides_df" not in st.session_state or set(st.session_state.get("productos_cache", [])) != set(productos):
@@ -356,7 +366,7 @@ if uploaded_file is not None:
         st.sidebar.info("No se encontró columna PRODUCTO. Se aplicará solo el límite GLOBAL.")
 
     # ---- Overrides de capacidad por FECHA: ENTRADA ----
-    st.sidebar.markdown("### 📅 Capacidad máx. ENTRADA por día (opcional)")
+    st.sidebar.markdown("### 📅 Overrides capacidad ENTRADA (opcional)")
 
     if "cap_overrides_ent_df" not in st.session_state:
         st.session_state.cap_overrides_ent_df = pd.DataFrame({
@@ -385,7 +395,7 @@ if uploaded_file is not None:
     )
 
     # ---- Overrides de capacidad por FECHA: SALIDA ----
-    st.sidebar.markdown("### 📅 Capacidad máx. SALIDA por día (opcional)")
+    st.sidebar.markdown("### 📅 Overrides capacidad SALIDA (opcional)")
 
     if "cap_overrides_sal_df" not in st.session_state:
         st.session_state.cap_overrides_sal_df = pd.DataFrame({
@@ -414,7 +424,7 @@ if uploaded_file is not None:
     )
 
     # ---- Overrides de capacidad por FECHA: ESTABILIZACIÓN ----
-    st.sidebar.markdown("### 📅 Capacidad máx. ESTABILIZACIÓN por día (opcional)")
+    st.sidebar.markdown("### 📅 Overrides capacidad ESTABILIZACIÓN (opcional)")
 
     if "cap_overrides_estab_df" not in st.session_state:
         st.session_state.cap_overrides_estab_df = pd.DataFrame({
@@ -463,7 +473,7 @@ if uploaded_file is not None:
             }
     st.session_state.cap_overrides_sal_df = cap_overrides_sal_df
 
-    # FIX: no guardar None; si CAP está vacío, se ignora ese override
+    # No guardar None; si CAP está vacío, se ignora ese override
     estab_cap_overrides = {}
     if not cap_overrides_estab_df.empty:
         tmp3 = cap_overrides_estab_df.dropna(subset=["FECHA"]).copy()
@@ -651,7 +661,7 @@ if uploaded_file is not None:
             else:
                 st.dataframe(df_estab, use_container_width=True, hide_index=True)
 
-                # Colores por exceso relativo a la capacidad del día (opcional)
+                # Colores por exceso relativo a la capacidad del día
                 colores = df_estab.apply(
                     lambda r: "crimson" if r["ESTAB_UNDS"] > r["CAPACIDAD"] else "teal",
                     axis=1
@@ -674,7 +684,7 @@ if uploaded_file is not None:
                     textposition="top center",
                     showlegend=False
                 ))
-                # ⛳ Línea horizontal fija (estilo antiguo): capacidad base con etiqueta
+                # Línea horizontal fija: capacidad base con etiqueta y trazo segmentado
                 fig_est.add_hline(
                     y=estab_cap, line_dash="dash", line_color="orange",
                     annotation_text=f"Capacidad: {estab_cap}",
@@ -684,11 +694,11 @@ if uploaded_file is not None:
                     xaxis_title="Fecha",
                     yaxis_title="Unidades en estabilización",
                     bargap=0.25,
-                    showlegend=False,      # <- sin leyenda
+                    showlegend=False,
                     xaxis=dict(
                         tickmode="array",
                         tickvals=df_estab["FECHA"],
-                        tickformat="%d %b (%a)"   # 👈 formato: 11 Sep (Thu)
+                        tickformat="%d %b (%a)"   # ej: 11 Sep (Thu)
                     )
                 )
                 st.plotly_chart(fig_est, use_container_width=True)
@@ -714,12 +724,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
-
-
-
-
-
-
-
