@@ -419,50 +419,49 @@ def planificar_filas_na(
         _aplicar_entrada_comun_para_grupo(["PCIVRPORCISAN"], marcar_si_falla=False)
 
     # Solo filas con ENTRADA_SAL NaT
-    # ============================================================
-    # Nueva estrategia:
-    # - Respeta TODAS las reglas (capacidad entrada/salida, estabilización, festivos/finde, límites, especiales...)
-    # - Si el día candidato tiene override de capacidad (para el intento actual), PRIORIZA acercarse a ese objetivo.
-    # - Si no hay override, balancea carga (entrada/salida) alrededor del promedio de candidatos.
-    # - Prioridad del score: (1) balance/objetivo, (2) cambio de TIPO, (3) cambio de NITRIF, (4) fecha más temprana.
+    # ===============================
+    # Estrategia: para cada lote pendiente, probamos TODAS las fechas hábiles factibles
+    # y elegimos la que minimiza (1) cambio de TIPO NITRIF y (2) cambio de NITRIF
+    # en el día de ENTRADA. Luego, como desempate, preferimos la fecha más temprana.
     from collections import Counter
 
-    # Perfil por día ya planificado (para medir cambios TIPO/NITRIF)
-    entrada_profile = {}
+    # Perfil inicial por día ya planificado
+    entrada_profile = {}  # fecha -> {"tipo": Counter(), "nitrif": Counter()}
     if "ENTRADA_SAL" in df_corr.columns:
         ya = df_corr.dropna(subset=["ENTRADA_SAL"]).copy()
+        if not ya.empty:
+            # normalizamos claves tipo y nitrif
+            def _norm_tipo(v):
+                s = str(v).strip().upper()
+                if "IBER" in s:
+                    return "IBÉRICO"
+                if "BLAN" in s:
+                    return "BLANCO"
+                return "OTRO"
+            def _norm_nitrif(v):
+                try:
+                    return int(v)
+                except Exception:
+                    return None
+            col_tipo = "TIPO NITRIF" if "TIPO NITRIF" in ya.columns else None
+            col_nitrif = "NITRIF" if "NITRIF" in ya.columns else None
+            for _, r in ya.iterrows():
+                d = pd.to_datetime(r["ENTRADA_SAL"]).normalize()
+                tipo = _norm_tipo(r[col_tipo]) if col_tipo else "OTRO"
+                nitr = _norm_nitrif(r[col_nitrif]) if col_nitrif else None
+                if d not in entrada_profile:
+                    entrada_profile[d] = {"tipo": Counter(), "nitrif": Counter()}
+                entrada_profile[d]["tipo"][tipo] += 1
+                if nitr is not None:
+                    entrada_profile[d]["nitrif"][nitr] += 1
 
-        def _norm_tipo(v):
-            s = str(v).strip().upper()
-            if "IBER" in s:
-                return "IBÉRICO"
-            if "BLAN" in s:
-                return "BLANCO"
-            return "OTRO"
-
-        def _norm_nitrif(v):
-            try:
-                return int(v)
-            except Exception:
-                return None
-
-        col_tipo = "TIPO NITRIF" if "TIPO NITRIF" in ya.columns else None
-        col_nitrif = "NITRIF" if "NITRIF" in ya.columns else None
-
-        for _, r in ya.iterrows():
-            d = pd.to_datetime(r["ENTRADA_SAL"]).normalize()
-            tipo = _norm_tipo(r[col_tipo]) if col_tipo else "OTRO"
-            nitr = _norm_nitrif(r[col_nitrif]) if col_nitrif else None
-            if d not in entrada_profile:
-                entrada_profile[d] = {"tipo": Counter(), "nitrif": Counter()}
-            entrada_profile[d]["tipo"][tipo] += 1
-            if nitr is not None:
-                entrada_profile[d]["nitrif"][nitr] += 1
-
+    # Prepara listado de pendientes. Opcional: mantener un orden estable básico
     pendientes = df_corr[df_corr["ENTRADA_SAL"].isna()].copy()
+    # Para coherencia visual, puedes ordenar por recepción primero (no afecta al criterio de minimización)
     if "DIA" in pendientes.columns:
         pendientes = pendientes.sort_values(["DIA", "PRODUCTO"], kind="stable")
 
+    # Utilidades de normalización
     def _norm_tipo(v):
         s = str(v).strip().upper()
         if "IBER" in s:
@@ -480,45 +479,35 @@ def planificar_filas_na(
     col_tipo = "TIPO NITRIF" if "TIPO NITRIF" in df_corr.columns else None
     col_nitrif = "NITRIF" if "NITRIF" in df_corr.columns else None
 
-    # Helpers: obtener "objetivo" (override) para ese día/attempt si existe
-    def _target_cap_ent(d, attempt):
-        dkey = pd.to_datetime(d).normalize()
-        ov = cap_overrides_ent.get(dkey)
-        if ov is None:
-            return None
-        val = ov.get("CAP1") if attempt == 1 else ov.get("CAP2")
-        return int(val) if (val is not None and pd.notna(val)) else None
-
-    def _target_cap_sal(d, attempt):
-        dkey = pd.to_datetime(d).normalize()
-        ov = cap_overrides_sal.get(dkey)
-        if ov is None:
-            return None
-        val = ov.get("CAP1") if attempt == 1 else ov.get("CAP2")
-        return int(val) if (val is not None and pd.notna(val)) else None
-
     for idx, row in pendientes.iterrows():
         dia_recepcion    = row["DIA"]
         unds             = int(row["UNDS"])
         dias_sal_optimos = int(row["DIAS_SAL_OPTIMOS"])
 
+        # Límite por PRODUCTO (si no existe, usa GLOBAL)
         prod = row["PRODUCTO"] if "PRODUCTO" in df_corr.columns else None
         dias_max_almacen = dias_max_por_producto.get(prod, dias_max_almacen_global)
 
+        # Normalizamos clave de tipo/nitrif del lote
         tipo_lote = _norm_tipo(row[col_tipo]) if col_tipo else "OTRO"
         nitr_lote = _norm_nitrif(row[col_nitrif]) if col_nitrif else None
 
         entrada_ini = dia_recepcion if es_habil(dia_recepcion) else siguiente_habil(dia_recepcion)
 
         asignado = False
+        # Intento 1 (capacidad de 1er intento) y si no hay fecha válida, Intento 2
         for attempt in [1, 2]:
-            # 1) Recolectar candidatos factibles con datos de carga y objetivos
-            raw_candidatos = []  # (entrada, salida, cap_e, load_e, cap_s, load_s, cost_tipo, cost_nitr, tgt_e, tgt_s)
+            candidatos = []  # (score_tuple, fecha)
+
+            # Recorremos todas las fechas hábiles dentro del límite natural
             entrada = entrada_ini
             while (entrada - dia_recepcion).days <= dias_max_almacen:
+                # 1) Capacidad ENTRADA
                 cap_ent_dia = get_cap_ent(entrada, attempt)
                 if carga_entrada.get(entrada, 0) + unds <= cap_ent_dia:
+                    # 2) Capacidad estabilización en [DIA, ENTRADA-1]
                     if cabe_en_estab_rango(dia_recepcion, entrada - pd.Timedelta(days=1), unds):
+                        # 3) SALIDA + ajustes y capacidad SALIDA
                         salida = entrada + timedelta(days=dias_sal_optimos)
                         if ajuste_finde:
                             if salida.weekday() == 5:
@@ -540,63 +529,32 @@ def planificar_filas_na(
 
                         cap_sal_dia = get_cap_sal(salida, attempt)
                         if carga_salida.get(salida, 0) + unds <= cap_sal_dia:
-                            # Costes TIPO/NITRIF según lo que ya hay en ese día de ENTRADA
+                            # ---- Factible: calculamos score de "cambios" para esa fecha de ENTRADA
                             prof = entrada_profile.get(entrada, {"tipo": Counter(), "nitrif": Counter()})
                             tipo_counts   = prof["tipo"]
                             nitrif_counts = prof["nitrif"]
-                            cost_tipo = 0 if sum(tipo_counts.values()) == 0 or tipo_counts.get(tipo_lote, 0) > 0 else 1
-                            cost_nitr = 0 if sum(nitrif_counts.values()) == 0 or (nitr_lote is not None and nitrif_counts.get(nitr_lote, 0) > 0) else 1
 
-                            # Objetivos por override (si existen para el attempt actual)
-                            tgt_e = _target_cap_ent(entrada, attempt)
-                            # Para salida: target del día *post-ajustes*
-                            tgt_s = _target_cap_sal(salida, attempt)
+                            # Coste por cambio de TIPO: 0 si el día está vacío o ya hay ese tipo; 1 si introduciría nuevo tipo
+                            if sum(tipo_counts.values()) == 0:
+                                cost_tipo = 0
+                            else:
+                                cost_tipo = 0 if tipo_counts.get(tipo_lote, 0) > 0 else 1
 
-                            raw_candidatos.append((
-                                entrada, salida,
-                                cap_ent_dia, carga_entrada.get(entrada, 0),
-                                cap_sal_dia, carga_salida.get(salida, 0),
-                                cost_tipo, cost_nitr,
-                                tgt_e, tgt_s
-                            ))
+                            # Coste por cambio de NITRIF: 0 si el día está vacío o ya hay ese código; 1 si no
+                            if sum(nitrif_counts.values()) == 0:
+                                cost_nitr = 0
+                            else:
+                                cost_nitr = 0 if (nitr_lote is not None and nitrif_counts.get(nitr_lote, 0) > 0) else 1
 
+                            # Score final: prioriza minimizar TIPO y luego NITRIF; desempata por fecha más temprana
+                            score = (cost_tipo, cost_nitr, entrada)
+                            candidatos.append((score, entrada, salida))
+
+                # siguiente hábil
                 entrada = siguiente_habil(entrada)
 
-            if raw_candidatos:
-                # Promedios de utilización (para días sin objetivo)
-                util_e_list = []
-                util_s_list = []
-                for (_, _, cap_e, load_e, cap_s, load_s, _, _, _, _) in raw_candidatos:
-                    util_e_list.append((load_e / cap_e) if cap_e else 1.0)
-                    util_s_list.append((load_s / cap_s) if cap_s else 1.0)
-                avg_util_e = sum(util_e_list) / len(util_e_list) if util_e_list else 0.0
-                avg_util_s = sum(util_s_list) / len(util_s_list) if util_s_list else 0.0
-
-                candidatos = []
-                for (ent, sal, cap_e, load_e, cap_s, load_s, cost_tipo, cost_nitr, tgt_e, tgt_s) in raw_candidatos:
-                    # --- Balance/objetivo para ENTRADA
-                    if tgt_e is not None:
-                        # Objetivo explícito: minimizar desviación relativa al objetivo
-                        entry_dev = abs((load_e + unds) - tgt_e) / max(1, tgt_e)
-                    else:
-                        # Sin objetivo: balancear respecto al promedio de utilizaciones
-                        util_e_after = ((load_e + unds) / cap_e) if cap_e else 1.0
-                        entry_dev = abs(util_e_after - avg_util_e)
-
-                    # --- Balance/objetivo para SALIDA
-                    if tgt_s is not None:
-                        exit_dev = abs((load_s + unds) - tgt_s) / max(1, tgt_s)
-                    else:
-                        util_s_after = ((load_s + unds) / cap_s) if cap_s else 1.0
-                        exit_dev = abs(util_s_after - avg_util_s)
-
-                    # Coste total de balance/objetivo (más pequeño = mejor)
-                    balance_cost = entry_dev + exit_dev
-
-                    # 🔑 Prioridad final: balance/objetivo -> tipo -> nitrif -> fecha
-                    score = (balance_cost, cost_tipo, cost_nitr, ent)
-                    candidatos.append((score, ent, sal))
-
+            # Elegimos el mejor candidato por score
+            if candidatos:
                 candidatos.sort(key=lambda t: t[0])
                 _, entrada_sel, salida_sel = candidatos[0]
 
@@ -615,7 +573,7 @@ def planificar_filas_na(
                 if entrada_sel.date() > dia_recepcion.date():
                     _sumar_en_rango(estab_stock, dia_recepcion, entrada_sel - pd.Timedelta(days=1), unds)
 
-                # Actualizar perfil de tipos/códigos para ese día de entrada
+                # Actualizar perfil por día (para siguientes lotes)
                 if entrada_sel not in entrada_profile:
                     entrada_profile[entrada_sel] = {"tipo": Counter(), "nitrif": Counter()}
                 entrada_profile[entrada_sel]["tipo"][tipo_lote] += 1
@@ -623,8 +581,7 @@ def planificar_filas_na(
                     entrada_profile[entrada_sel]["nitrif"][nitr_lote] += 1
 
                 asignado = True
-            if asignado:
-                break
+                break  # salimos del for attempt
 
         if not asignado:
             df_corr.at[idx, "LOTE_NO_ENCAJA"] = "Sí"
@@ -1047,10 +1004,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
-
-
-
-
-
