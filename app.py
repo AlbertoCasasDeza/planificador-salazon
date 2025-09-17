@@ -384,6 +384,7 @@ def planificar_filas_na(
                         carga_ant = carga_salida.get(anterior, 0)
                         carga_sig = carga_salida.get(siguiente, 0)
                         salida = anterior if carga_ant <= carga_sig else siguiente
+
                     elif dia_semana == 4:
                         salida = anterior_habil(salida)
 
@@ -604,9 +605,9 @@ if uploaded_file is not None:
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "FECHA": st.column_config.DateColumn("Fecha (salida)", format="YYYY-MM-DD"),
-            "CAP1": st.column_config.NumberColumn("Capacidad 1º intento", step=50, min_value=0),
-            "CAP2": st.column_config.NumberColumn("Capacidad 2º intento", step=50, min_value=0),
+                "FECHA": st.column_config.DateColumn("Fecha (salida)", format="YYYY-MM-DD"),
+                "CAP1": st.column_config.NumberColumn("Capacidad 1º intento", step=50, min_value=0),
+                "CAP2": st.column_config.NumberColumn("Capacidad 2º intento", step=50, min_value=0),
         },
         key="cap_overrides_sal_editor"
     )
@@ -699,6 +700,64 @@ if uploaded_file is not None:
             column_config=column_config,
             num_rows="dynamic",
             use_container_width=True
+        )
+
+        # ===============================
+        # 📋 Orden de ENTRADA por día
+        # ===============================
+        st.subheader("🗂️ Orden de ENTRADA en salazón por día")
+
+        df_plan_ok = df_editable.copy()
+        df_plan_ok = df_plan_ok.dropna(subset=["ENTRADA_SAL"]).copy()
+
+        for col in ["DIA", "ENTRADA_SAL"]:
+            if col in df_plan_ok.columns:
+                df_plan_ok[col] = pd.to_datetime(df_plan_ok[col], errors="coerce")
+
+        if "LOTE" not in df_plan_ok.columns:
+            df_plan_ok["LOTE"] = (df_plan_ok.index + 1).astype(str)
+
+        df_plan_ok["DIA_N"] = df_plan_ok["DIA"].dt.normalize()
+        df_plan_ok["ENTRADA_N"] = df_plan_ok["ENTRADA_SAL"].dt.normalize()
+
+        # Prioridad: primero los que han estado en estabilización (entrada > día recepción)
+        df_plan_ok["EN_ESTAB_ANTES"] = (df_plan_ok["ENTRADA_N"] > df_plan_ok["DIA_N"]).fillna(False)
+        df_plan_ok["PRIORIDAD_KEY"] = (~df_plan_ok["EN_ESTAB_ANTES"]).astype(int)  # 0 primero, 1 después
+
+        def _ordenar_por_dia(grp: pd.DataFrame) -> pd.DataFrame:
+            grp = grp.copy()
+            grp["LOTE"] = grp["LOTE"].astype(str)
+            grp.sort_values(
+                by=["PRIORIDAD_KEY", "DIA_N", "LOTE"],
+                ascending=[True, True, True],
+                inplace=True,
+                kind="stable"
+            )
+            grp["ORDEN"] = range(1, len(grp) + 1)
+            return grp
+
+        df_orden = (
+            df_plan_ok
+                .groupby("ENTRADA_N", group_keys=False)
+                .apply(_ordenar_por_dia)
+        )
+
+        cols_show = ["ENTRADA_N", "ORDEN", "LOTE", "PRODUCTO", "UNDS", "DIA", "DIAS_ALMACENADOS"]
+        cols_show = [c for c in cols_show if c in df_orden.columns]
+        df_orden_show = df_orden[cols_show].rename(columns={
+            "ENTRADA_N": "FECHA_ENTRADA"
+        }).sort_values(["FECHA_ENTRADA", "ORDEN"])
+
+        st.dataframe(df_orden_show, use_container_width=True, hide_index=True)
+
+        orden_xlsx = BytesIO()
+        df_orden_show.to_excel(orden_xlsx, index=False)
+        orden_xlsx.seek(0)
+        st.download_button(
+            "💾 Descargar orden de ENTRADA por día (Excel)",
+            data=orden_xlsx,
+            file_name="orden_entrada_por_dia.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
         # -------------------------------
@@ -912,5 +971,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
