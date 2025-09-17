@@ -499,7 +499,6 @@ def planificar_filas_na(
             df_corr.at[idx, "LOTE_NO_ENCAJA"] = "Sí"
 
             # probamos todas las fechas hábiles del rango y medimos qué habría que relajar
-            entrada = entrada_ini
             for attempt in [1, 2]:
                 entrada = entrada_ini
                 while (entrada - dia_recepcion).days <= dias_max_almacen:
@@ -517,7 +516,7 @@ def planificar_filas_na(
                         elif dia_semana in [1, 2, 3]:
                             anterior = anterior_habil(salida)
                             siguiente = siguiente_habil(salida)
-                            # para diagnóstico solo, no recalculamos por carga
+                            # para diagnóstico solo
                             salida = anterior if (carga_salida.get(anterior, 0) <= carga_salida.get(siguiente, 0)) else siguiente
                         elif dia_semana == 4:
                             salida = anterior_habil(salida)
@@ -526,35 +525,71 @@ def planificar_filas_na(
                     cap_ent_dia   = get_cap_ent(entrada, attempt)
                     falta_ent     = max(carga_entrada.get(entrada, 0) + unds - cap_ent_dia, 0)
 
-                    # estabilización: máximo exceso en el rango
-                    falta_estab = 0
+                    # estabilización: guarda déficit por CADA día del rango
+                    estab_deficits = []  # lista de dicts {fecha, cap, stock_actual, stock_con_lote, deficit}
+                    falta_estab_max = 0
                     if entrada.date() > dia_recepcion.date():
-                        max_exceso = 0
                         for d in pd.date_range(dia_recepcion.normalize(), (entrada - pd.Timedelta(days=1)).normalize(), freq="D"):
                             cap_d = get_estab_cap(d)
-                            exceso_d = max(estab_stock.get(d, 0) + unds - cap_d, 0)
-                            if exceso_d > max_exceso:
-                                max_exceso = exceso_d
-                        falta_estab = max_exceso
+                            stock_act = estab_stock.get(d.normalize(), 0)
+                            stock_con = stock_act + unds
+                            exceso_d = max(stock_con - cap_d, 0)
+                            estab_deficits.append({
+                                "FECHA": d.normalize(),
+                                "CAP_DIA": int(cap_d),
+                                "STOCK_ACT": int(stock_act),
+                                "STOCK_CON_LOTE": int(stock_con),
+                                "DEFICIT_DIA": int(exceso_d),
+                            })
+                            if exceso_d > falta_estab_max:
+                                falta_estab_max = exceso_d
 
                     cap_sal_dia   = get_cap_sal(salida, attempt)
                     falta_sal     = max(carga_salida.get(salida, 0) + unds - cap_sal_dia, 0)
 
-                    if (falta_ent > 0) or (falta_estab > 0) or (falta_sal > 0):
+                    # Texto de recomendación rápida (qué tocar y cuánto)
+                    recomendaciones = []
+                    if falta_ent > 0:
+                        recomendaciones.append(
+                            f"Subir ENTRADA el {entrada.normalize().date()} en +{int(falta_ent)} unds (INTENTO {attempt})."
+                        )
+                    if falta_sal > 0:
+                        recomendaciones.append(
+                            f"Subir SALIDA el {salida.normalize().date()} en +{int(falta_sal)} unds (INTENTO {attempt})."
+                        )
+                    if falta_estab_max > 0:
+                        # listar solo días con déficit > 0
+                        dias_estab = [f"{r['FECHA'].date()}(+{r['DEFICIT_DIA']})" for r in estab_deficits if r["DEFICIT_DIA"] > 0]
+                        if dias_estab:
+                            recomendaciones.append(
+                                "Subir ESTABILIZACIÓN en: " + ", ".join(dias_estab)
+                            )
+
+                    # Cadena compacta con el detalle de estabilización (para verlo en la tabla)
+                    estab_detalle_str = "; ".join([
+                        f"{r['FECHA'].date()}: {r['STOCK_ACT']}→{r['STOCK_CON_LOTE']} / cap {r['CAP_DIA']} (déficit {r['DEFICIT_DIA']})"
+                        for r in estab_deficits if r["DEFICIT_DIA"] > 0
+                    ])
+
+                    # Solo guardamos si hay algo que ajustar (algún déficit > 0)
+                    if (falta_ent > 0) or (falta_estab_max > 0) or (falta_sal > 0):
                         sugerencias.append({
                             "LOTE": row["LOTE"] if "LOTE" in df_corr.columns else idx,
-                            "PRODUCTO": row["PRODUCTO"] if "PRODUCTO" in df_corr.columns else "",
+                            "PRODUCTO": row.get("PRODUCTO", ""),
                             "UNDS": unds,
                             "DIA_RECEPCION": dia_recepcion.normalize(),
                             "ENTRADA_PROPUESTA": pd.to_datetime(entrada).normalize(),
                             "SALIDA_PROPUESTA":  pd.to_datetime(salida).normalize(),
                             "INTENTO": attempt,
                             "DEFICIT_ENTRADA": int(falta_ent),
-                            "DEFICIT_ESTAB_MAX": int(falta_estab),
+                            "DEFICIT_ESTAB_MAX": int(falta_estab_max),
                             "DEFICIT_SALIDA": int(falta_sal),
-                            "MAX_DEFICIT": int(max(falta_ent, falta_estab, falta_sal)),
-                            "TOTAL_DEFICIT": int(falta_ent + falta_estab + falta_sal),
+                            "MAX_DEFICIT": int(max(falta_ent, falta_estab_max, falta_sal)),
+                            "TOTAL_DEFICIT": int(falta_ent + falta_estab_max + falta_sal),
+                            "ESTAB_DIAS_DEFICIT": estab_detalle_str,  # legible
+                            "RECOMENDACION": " | ".join(recomendaciones) if recomendaciones else "",
                         })
+
                     entrada = siguiente_habil(entrada)
 
     # Métrica final
@@ -1018,3 +1053,4 @@ with st.expander("⚠️ Opciones para incluir lotes que no encajan (relajando l
             file_name="sugerencias_lotes_no_encajan.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
