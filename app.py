@@ -703,20 +703,23 @@ if uploaded_file is not None:
         )
 
         # ===============================
-        # 📋 Orden de ENTRADA por día
+        # 📋 Orden de ENTRADA por día (con NITRIF)
         # ===============================
         st.subheader("🗂️ Orden de ENTRADA en salazón por día")
 
         df_plan_ok = df_editable.copy()
         df_plan_ok = df_plan_ok.dropna(subset=["ENTRADA_SAL"]).copy()
 
+        # Asegurar tipos fecha
         for col in ["DIA", "ENTRADA_SAL"]:
             if col in df_plan_ok.columns:
                 df_plan_ok[col] = pd.to_datetime(df_plan_ok[col], errors="coerce")
 
+        # Si no existe LOTE, creamos uno estable a partir del índice (para desempates)
         if "LOTE" not in df_plan_ok.columns:
             df_plan_ok["LOTE"] = (df_plan_ok.index + 1).astype(str)
 
+        # Normalizar fechas (día puro)
         df_plan_ok["DIA_N"] = df_plan_ok["DIA"].dt.normalize()
         df_plan_ok["ENTRADA_N"] = df_plan_ok["ENTRADA_SAL"].dt.normalize()
 
@@ -724,6 +727,26 @@ if uploaded_file is not None:
         df_plan_ok["EN_ESTAB_ANTES"] = (df_plan_ok["ENTRADA_N"] > df_plan_ok["DIA_N"]).fillna(False)
         df_plan_ok["PRIORIDAD_KEY"] = (~df_plan_ok["EN_ESTAB_ANTES"]).astype(int)  # 0 primero, 1 después
 
+        # ---- Mapeo NITRIF -> tipo de sal
+        nitrif_iberico = {21, 22, 2, 3}
+        nitrif_blanco  = {12, 13}
+
+        def _tipo_nitrif(v):
+            try:
+                n = int(v)
+            except Exception:
+                return "Desconocido"
+            if n in nitrif_iberico:
+                return "Ibérico"
+            if n in nitrif_blanco:
+                return "Blanco"
+            return "Desconocido"
+
+        if "NITRIF" in df_plan_ok.columns:
+            # No forzamos tipo; guardamos original y calculamos tipo amigable
+            df_plan_ok["TIPO_NITRIF"] = df_plan_ok["NITRIF"].apply(_tipo_nitrif)
+
+        # Orden por día de entrada: PRIORIDAD -> DIA (más antiguo primero) -> LOTE
         def _ordenar_por_dia(grp: pd.DataFrame) -> pd.DataFrame:
             grp = grp.copy()
             grp["LOTE"] = grp["LOTE"].astype(str)
@@ -738,18 +761,37 @@ if uploaded_file is not None:
 
         df_orden = (
             df_plan_ok
-                .groupby("ENTRADA_N", group_keys=False)
-                .apply(_ordenar_por_dia)
+              .groupby("ENTRADA_N", group_keys=False)
+              .apply(_ordenar_por_dia)
         )
 
-        cols_show = ["ENTRADA_N", "ORDEN", "LOTE", "PRODUCTO", "UNDS", "DIA", "DIAS_ALMACENADOS"]
+        # Selección de columnas (añadimos NITRIF y TIPO_NITRIF si existen)
+        cols_show = ["ENTRADA_N", "ORDEN", "LOTE", "PRODUCTO", "UNDS", "NITRIF", "TIPO_NITRIF", "DIA", "DIAS_ALMACENADOS"]
         cols_show = [c for c in cols_show if c in df_orden.columns]
         df_orden_show = df_orden[cols_show].rename(columns={
             "ENTRADA_N": "FECHA_ENTRADA"
         }).sort_values(["FECHA_ENTRADA", "ORDEN"])
 
+        # Mostrar tabla
         st.dataframe(df_orden_show, use_container_width=True, hide_index=True)
 
+        # Validación suave: Paleta (PRODUCTO empieza por 'P') no debería llevar NITRIF blanco (12/13)
+        if {"PRODUCTO", "NITRIF"}.issubset(df_orden_show.columns):
+            _mask_paleta = df_orden_show["PRODUCTO"].astype(str).str.startswith("P", na=False)
+            def _is_blanco_code(v):
+                try:
+                    return int(v) in nitrif_blanco
+                except Exception:
+                    return False
+            _mask_blanco_code = df_orden_show["NITRIF"].apply(_is_blanco_code)
+            _conflictos = df_orden_show[_mask_paleta & _mask_blanco_code]
+            if not _conflictos.empty:
+                st.warning(
+                    f"⚠️ Se han detectado **{len(_conflictos)}** lotes de **Paleta (P...)** con código NITRIF de **Blanco (12/13)**. "
+                    "Revisa la columna NITRIF en el Excel si es intencionado."
+                )
+
+        # Descargar Excel con el orden
         orden_xlsx = BytesIO()
         df_orden_show.to_excel(orden_xlsx, index=False)
         orden_xlsx.seek(0)
@@ -971,3 +1013,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
