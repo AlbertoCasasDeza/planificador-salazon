@@ -419,7 +419,51 @@ def planificar_filas_na(
         _aplicar_entrada_comun_para_grupo(["PCIVRPORCISAN"], marcar_si_falla=False)
 
     # Solo filas con ENTRADA_SAL NaT
-    for idx, row in df_corr[df_corr["ENTRADA_SAL"].isna()].iterrows():
+    # ==> Reordenamos los lotes pendientes para minimizar cambios al asignar ENTRADA:
+    #     (1) por TIPO NITRIF (IBÉRICO -> BLANCO -> otros), (2) por NITRIF (código asc),
+    #     y luego (3) por DIA (más antiguo primero) y (4) por índice (estable).
+    pending = df_corr[df_corr["ENTRADA_SAL"].isna()].copy()
+
+    # Claves robustas para TIPO NITRIF y NITRIF (aunque no vengan o vengan sucios)
+    def _tipo_key(v):
+        s = str(v).strip().upper()
+        # Cubre "IBÉRICO", "IBERICO", etc.
+        if "IBER" in s:
+            return 0
+        if "BLAN" in s:
+            return 1
+        return 2  # Desconocido/otros al final
+
+    def _nitrif_key(v):
+        try:
+            return int(v)
+        except Exception:
+            return 10**9  # muy grande -> al final
+
+    # Columnas fuente
+    col_tipo = "TIPO NITRIF" if "TIPO NITRIF" in pending.columns else None
+    col_nitrif = "NITRIF" if "NITRIF" in pending.columns else None
+
+    # Construcción de claves
+    pending["__TIPO_KEY__"] = pending[col_tipo].map(_tipo_key) if col_tipo else 2
+    pending["__NITRIF_KEY__"] = pending[col_nitrif].map(_nitrif_key) if col_nitrif else 10**9
+    # DIA como datetime para ordenar (si falta, va al final)
+    if "DIA" in pending.columns:
+        pending["__DIA_KEY__"] = pd.to_datetime(pending["DIA"], errors="coerce")
+    else:
+        pending["__DIA_KEY__"] = pd.NaT
+
+    # Orden global de planificación: TIPO -> NITRIF -> DIA -> índice
+    pending_sorted_idx = (
+        pending.sort_values(
+            by=["__TIPO_KEY__", "__NITRIF_KEY__", "__DIA_KEY__"],
+            ascending=[True, True, True],
+            kind="stable"
+        ).index.tolist()
+    )
+
+    for idx in pending_sorted_idx:
+        row = df_corr.loc[idx]
         dia_recepcion    = row["DIA"]
         unds             = row["UNDS"]
         dias_sal_optimos = int(row["DIAS_SAL_OPTIMOS"])
@@ -913,6 +957,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
