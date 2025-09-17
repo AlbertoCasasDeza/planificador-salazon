@@ -586,7 +586,6 @@ def planificar_filas_na(
                             "DEFICIT_SALIDA": int(falta_sal),
                             "MAX_DEFICIT": int(max(falta_ent, falta_estab_max, falta_sal)),
                             "TOTAL_DEFICIT": int(falta_ent + falta_estab_max + falta_sal),
-                            "ESTAB_DIAS_DEFICIT": estab_detalle_str,  # legible
                             "RECOMENDACION": " | ".join(recomendaciones) if recomendaciones else "",
                         })
 
@@ -1053,4 +1052,5 @@ with st.expander("⚠️ Opciones para incluir lotes que no encajan (relajando l
             file_name="sugerencias_lotes_no_encajan.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
