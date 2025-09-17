@@ -655,7 +655,7 @@ if uploaded_file is not None:
 
     if "cap_overrides_estab_df" not in st.session_state:
         st.session_state.cap_overrides_estab_df = pd.DataFrame({
-            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]"])),
+            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]")),
             "CAP":   pd.Series([], dtype="Int64"),
         })
     st.session_state.cap_overrides_estab_df["FECHA"] = pd.to_datetime(
@@ -1004,5 +1004,6 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
