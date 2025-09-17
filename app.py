@@ -419,8 +419,15 @@ def planificar_filas_na(
         _aplicar_entrada_comun_para_grupo(["PCIVRPORCISAN"], marcar_si_falla=False)
 
     # Solo filas con ENTRADA_SAL NaT
+    # ============================================================
+    # Nueva estrategia:
+    # - Respeta TODAS las reglas (capacidad entrada/salida, estabilización, festivos/finde, límites, especiales...)
+    # - Si el día candidato tiene override de capacidad (para el intento actual), PRIORIZA acercarse a ese objetivo.
+    # - Si no hay override, balancea carga (entrada/salida) alrededor del promedio de candidatos.
+    # - Prioridad del score: (1) balance/objetivo, (2) cambio de TIPO, (3) cambio de NITRIF, (4) fecha más temprana.
     from collections import Counter
 
+    # Perfil por día ya planificado (para medir cambios TIPO/NITRIF)
     entrada_profile = {}
     if "ENTRADA_SAL" in df_corr.columns:
         ya = df_corr.dropna(subset=["ENTRADA_SAL"]).copy()
@@ -473,6 +480,23 @@ def planificar_filas_na(
     col_tipo = "TIPO NITRIF" if "TIPO NITRIF" in df_corr.columns else None
     col_nitrif = "NITRIF" if "NITRIF" in df_corr.columns else None
 
+    # Helpers: obtener "objetivo" (override) para ese día/attempt si existe
+    def _target_cap_ent(d, attempt):
+        dkey = pd.to_datetime(d).normalize()
+        ov = cap_overrides_ent.get(dkey)
+        if ov is None:
+            return None
+        val = ov.get("CAP1") if attempt == 1 else ov.get("CAP2")
+        return int(val) if (val is not None and pd.notna(val)) else None
+
+    def _target_cap_sal(d, attempt):
+        dkey = pd.to_datetime(d).normalize()
+        ov = cap_overrides_sal.get(dkey)
+        if ov is None:
+            return None
+        val = ov.get("CAP1") if attempt == 1 else ov.get("CAP2")
+        return int(val) if (val is not None and pd.notna(val)) else None
+
     for idx, row in pendientes.iterrows():
         dia_recepcion    = row["DIA"]
         unds             = int(row["UNDS"])
@@ -488,7 +512,8 @@ def planificar_filas_na(
 
         asignado = False
         for attempt in [1, 2]:
-            raw_candidatos = []
+            # 1) Recolectar candidatos factibles con datos de carga y objetivos
+            raw_candidatos = []  # (entrada, salida, cap_e, load_e, cap_s, load_s, cost_tipo, cost_nitr, tgt_e, tgt_s)
             entrada = entrada_ini
             while (entrada - dia_recepcion).days <= dias_max_almacen:
                 cap_ent_dia = get_cap_ent(entrada, attempt)
@@ -515,53 +540,82 @@ def planificar_filas_na(
 
                         cap_sal_dia = get_cap_sal(salida, attempt)
                         if carga_salida.get(salida, 0) + unds <= cap_sal_dia:
+                            # Costes TIPO/NITRIF según lo que ya hay en ese día de ENTRADA
                             prof = entrada_profile.get(entrada, {"tipo": Counter(), "nitrif": Counter()})
                             tipo_counts   = prof["tipo"]
                             nitrif_counts = prof["nitrif"]
-
                             cost_tipo = 0 if sum(tipo_counts.values()) == 0 or tipo_counts.get(tipo_lote, 0) > 0 else 1
                             cost_nitr = 0 if sum(nitrif_counts.values()) == 0 or (nitr_lote is not None and nitrif_counts.get(nitr_lote, 0) > 0) else 1
+
+                            # Objetivos por override (si existen para el attempt actual)
+                            tgt_e = _target_cap_ent(entrada, attempt)
+                            # Para salida: target del día *post-ajustes*
+                            tgt_s = _target_cap_sal(salida, attempt)
 
                             raw_candidatos.append((
                                 entrada, salida,
                                 cap_ent_dia, carga_entrada.get(entrada, 0),
                                 cap_sal_dia, carga_salida.get(salida, 0),
-                                cost_tipo, cost_nitr
+                                cost_tipo, cost_nitr,
+                                tgt_e, tgt_s
                             ))
 
                 entrada = siguiente_habil(entrada)
 
             if raw_candidatos:
-                util_e_list = [(load_e / cap_e) if cap_e else 1.0 for (_, _, cap_e, load_e, _, _, _, _) in raw_candidatos]
-                util_s_list = [(load_s / cap_s) if cap_s else 1.0 for (_, _, _, _, cap_s, load_s, _, _) in raw_candidatos]
+                # Promedios de utilización (para días sin objetivo)
+                util_e_list = []
+                util_s_list = []
+                for (_, _, cap_e, load_e, cap_s, load_s, _, _, _, _) in raw_candidatos:
+                    util_e_list.append((load_e / cap_e) if cap_e else 1.0)
+                    util_s_list.append((load_s / cap_s) if cap_s else 1.0)
                 avg_util_e = sum(util_e_list) / len(util_e_list) if util_e_list else 0.0
                 avg_util_s = sum(util_s_list) / len(util_s_list) if util_s_list else 0.0
 
                 candidatos = []
-                for (ent, sal, cap_e, load_e, cap_s, load_s, cost_tipo, cost_nitr) in raw_candidatos:
-                    util_e_after = ((load_e + unds) / cap_e) if cap_e else 1.0
-                    util_s_after = ((load_s + unds) / cap_s) if cap_s else 1.0
-                    balance_cost = abs(util_e_after - avg_util_e) + abs(util_s_after - avg_util_s)
+                for (ent, sal, cap_e, load_e, cap_s, load_s, cost_tipo, cost_nitr, tgt_e, tgt_s) in raw_candidatos:
+                    # --- Balance/objetivo para ENTRADA
+                    if tgt_e is not None:
+                        # Objetivo explícito: minimizar desviación relativa al objetivo
+                        entry_dev = abs((load_e + unds) - tgt_e) / max(1, tgt_e)
+                    else:
+                        # Sin objetivo: balancear respecto al promedio de utilizaciones
+                        util_e_after = ((load_e + unds) / cap_e) if cap_e else 1.0
+                        entry_dev = abs(util_e_after - avg_util_e)
 
-                    # 🔑 ORDEN DE PRIORIDAD: (balance primero, luego tipo, luego nitrif, luego fecha)
+                    # --- Balance/objetivo para SALIDA
+                    if tgt_s is not None:
+                        exit_dev = abs((load_s + unds) - tgt_s) / max(1, tgt_s)
+                    else:
+                        util_s_after = ((load_s + unds) / cap_s) if cap_s else 1.0
+                        exit_dev = abs(util_s_after - avg_util_s)
+
+                    # Coste total de balance/objetivo (más pequeño = mejor)
+                    balance_cost = entry_dev + exit_dev
+
+                    # 🔑 Prioridad final: balance/objetivo -> tipo -> nitrif -> fecha
                     score = (balance_cost, cost_tipo, cost_nitr, ent)
                     candidatos.append((score, ent, sal))
 
                 candidatos.sort(key=lambda t: t[0])
                 _, entrada_sel, salida_sel = candidatos[0]
 
+                # Asignación
                 df_corr.at[idx, "ENTRADA_SAL"]      = entrada_sel
                 df_corr.at[idx, "SALIDA_SAL"]       = salida_sel
                 df_corr.at[idx, "DIAS_SAL"]         = (salida_sel - entrada_sel).days
                 df_corr.at[idx, "DIAS_ALMACENADOS"] = (entrada_sel - dia_recepcion).days
                 df_corr.at[idx, "LOTE_NO_ENCAJA"]   = "No"
 
+                # Actualizar cargas
                 carga_entrada[entrada_sel] = carga_entrada.get(entrada_sel, 0) + unds
                 carga_salida[salida_sel]   = carga_salida.get(salida_sel, 0) + unds
 
+                # Actualizar estabilización
                 if entrada_sel.date() > dia_recepcion.date():
                     _sumar_en_rango(estab_stock, dia_recepcion, entrada_sel - pd.Timedelta(days=1), unds)
 
+                # Actualizar perfil de tipos/códigos para ese día de entrada
                 if entrada_sel not in entrada_profile:
                     entrada_profile[entrada_sel] = {"tipo": Counter(), "nitrif": Counter()}
                 entrada_profile[entrada_sel]["tipo"][tipo_lote] += 1
@@ -993,6 +1047,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
