@@ -702,122 +702,6 @@ if uploaded_file is not None:
             use_container_width=True
         )
 
-        # ===============================
-        # 📋 Orden de ENTRADA por día (minimizando cambios de TIPO_NITRIF y NITRIF)
-        # ===============================
-        st.subheader("🗂️ Orden de ENTRADA en salazón por día")
-
-        df_plan_ok = df_editable.copy().dropna(subset=["ENTRADA_SAL"]).copy()
-
-        # Asegurar tipos fecha
-        for col in ["DIA", "ENTRADA_SAL"]:
-            if col in df_plan_ok.columns:
-                df_plan_ok[col] = pd.to_datetime(df_plan_ok[col], errors="coerce")
-
-        # Si no existe LOTE, creamos uno estable a partir del índice (para desempates)
-        if "LOTE" not in df_plan_ok.columns:
-            df_plan_ok["LOTE"] = (df_plan_ok.index + 1).astype(str)
-
-        # Normalizar fechas (día puro)
-        df_plan_ok["DIA_N"] = df_plan_ok["DIA"].dt.normalize()
-        df_plan_ok["ENTRADA_N"] = df_plan_ok["ENTRADA_SAL"].dt.normalize()
-
-        # Prioridad: primero los que han estado en estabilización (entrada > día recepción)
-        df_plan_ok["EN_ESTAB_ANTES"] = (df_plan_ok["ENTRADA_N"] > df_plan_ok["DIA_N"]).fillna(False)
-        df_plan_ok["PRIORIDAD_KEY"] = (~df_plan_ok["EN_ESTAB_ANTES"]).astype(int)  # 0 primero, 1 después
-
-        # ---- NITRIF y tipo de sal
-        nitrif_iberico = {21, 22, 2, 3}
-        nitrif_blanco  = {12, 13}
-
-        def _tipo_nitrif(v):
-            try:
-                n = int(v)
-            except Exception:
-                return "Desconocido"
-            if n in nitrif_iberico:
-                return "Ibérico"
-            if n in nitrif_blanco:
-                return "Blanco"
-            return "Desconocido"
-
-        # Si no existe NITRIF, lo creamos vacío para que el bloque no rompa
-        if "NITRIF" not in df_plan_ok.columns:
-            df_plan_ok["NITRIF"] = pd.NA
-
-        df_plan_ok["TIPO_NITRIF"] = df_plan_ok["NITRIF"].apply(_tipo_nitrif)
-
-        # Claves de orden para agrupar por tipo/código y así minimizar cambios
-        tipo_order = {"Ibérico": 0, "Blanco": 1, "Desconocido": 2}
-        df_plan_ok["TIPO_KEY"] = df_plan_ok["TIPO_NITRIF"].map(tipo_order).fillna(2).astype(int)
-
-        # NITRIF como número para ordenar (NaN -> muy al final)
-        def _nitrif_key(v):
-            try:
-                return int(v)
-            except Exception:
-                return 10**9  # grande para que quede al final
-
-        df_plan_ok["NITRIF_KEY"] = df_plan_ok["NITRIF"].apply(_nitrif_key)
-
-        # Orden por día de entrada:
-        # PRIORIDAD (0/1) -> TIPO_KEY (agrupa por tipo) -> NITRIF_KEY (agrupa por código)
-        # -> DIA_N (más antiguo primero) -> LOTE (estable)
-        def _ordenar_por_dia(grp: pd.DataFrame) -> pd.DataFrame:
-            grp = grp.copy()
-            grp["LOTE"] = grp["LOTE"].astype(str)
-            grp.sort_values(
-                by=["PRIORIDAD_KEY", "TIPO_KEY", "NITRIF_KEY", "DIA_N", "LOTE"],
-                ascending=[True, True, True, True, True],
-                inplace=True,
-                kind="stable"
-            )    
-            grp["ORDEN"] = range(1, len(grp) + 1)
-            return grp
-
-        df_orden = (
-            df_plan_ok
-              .groupby("ENTRADA_N", group_keys=False)
-              .apply(_ordenar_por_dia)
-        )
-
-        # Selección de columnas (incluimos NITRIF y TIPO_NITRIF)
-        cols_show = ["ENTRADA_N", "ORDEN", "LOTE", "PRODUCTO", "UNDS", "NITRIF", "TIPO_NITRIF", "DIA", "DIAS_ALMACENADOS"]
-        cols_show = [c for c in cols_show if c in df_orden.columns]
-        df_orden_show = df_orden[cols_show].rename(columns={
-            "ENTRADA_N": "FECHA_ENTRADA"
-        }).sort_values(["FECHA_ENTRADA", "ORDEN"])
-
-        # Mostrar tabla
-        st.dataframe(df_orden_show, use_container_width=True, hide_index=True)
-
-        # Validación suave: Paleta (PRODUCTO empieza por 'P') no debería llevar NITRIF blanco (12/13)
-        if {"PRODUCTO", "NITRIF"}.issubset(df_orden_show.columns):
-            _mask_paleta = df_orden_show["PRODUCTO"].astype(str).str.startswith("P", na=False)
-            def _is_blanco_code(v):
-                try:
-                    return int(v) in nitrif_blanco
-                except Exception:
-                    return False
-            _mask_blanco_code = df_orden_show["NITRIF"].apply(_is_blanco_code)
-            _conflictos = df_orden_show[_mask_paleta & _mask_blanco_code]
-            if not _conflictos.empty:
-                st.warning(
-                    f"⚠️ Se han detectado **{len(_conflictos)}** lotes de **Paleta (P...)** con código NITRIF de **Blanco (12/13)**. "
-                    "Revisa la columna NITRIF en el Excel si es intencionado."
-                )
-
-        # Descargar Excel con el orden
-        orden_xlsx = BytesIO()
-        df_orden_show.to_excel(orden_xlsx, index=False)
-        orden_xlsx.seek(0)
-        st.download_button(
-            "💾 Descargar orden de ENTRADA por día (Excel)",
-            data=orden_xlsx,
-            file_name="orden_entrada_por_dia.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
         # -------------------------------
         # Gráfico: Entrada vs Salida lado a lado + apilado por LOTE (leyenda por lote)
         # -------------------------------
@@ -1029,5 +913,6 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
