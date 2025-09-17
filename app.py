@@ -134,7 +134,6 @@ def calcular_estabilizacion_diaria(df_plan: pd.DataFrame, cap: int, estab_cap_ov
     df_estab["ESTAB_PALETA"] = df_estab["FECHA"].map(lambda d: int(carga_paleta.get(d.normalize(), 0)))
     df_estab["ESTAB_JAMON"]  = df_estab["FECHA"].map(lambda d: int(carga_jamon.get(d.normalize(), 0)))
 
-    # Capacidad efectiva por fecha (override si existe)
     if estab_cap_overrides is None:
         estab_cap_overrides = {}
 
@@ -597,9 +596,9 @@ if uploaded_file is not None:
 
     if "cap_overrides_ent_df" not in st.session_state:
         st.session_state.cap_overrides_ent_df = pd.DataFrame({
-            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]"])),
-            "CAP1":  pd.Series([], dtype="Int64"),
-            "CAP2":  pd.Series([], dtype="Int64"),
+            "FECHA": pd.Series(dtype="datetime64[ns]"),
+            "CAP1":  pd.Series(dtype="Int64"),
+            "CAP2":  pd.Series(dtype="Int64"),
         })
     st.session_state.cap_overrides_ent_df["FECHA"] = pd.to_datetime(
         st.session_state.cap_overrides_ent_df["FECHA"], errors="coerce"
@@ -626,9 +625,9 @@ if uploaded_file is not None:
 
     if "cap_overrides_sal_df" not in st.session_state:
         st.session_state.cap_overrides_sal_df = pd.DataFrame({
-            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]"])),
-            "CAP1":  pd.Series([], dtype="Int64"),
-            "CAP2":  pd.Series([], dtype="Int64"),
+            "FECHA": pd.Series(dtype="datetime64[ns]"),
+            "CAP1":  pd.Series(dtype="Int64"),
+            "CAP2":  pd.Series(dtype="Int64"),
         })
     st.session_state.cap_overrides_sal_df["FECHA"] = pd.to_datetime(
         st.session_state.cap_overrides_sal_df["FECHA"], errors="coerce"
@@ -655,8 +654,8 @@ if uploaded_file is not None:
 
     if "cap_overrides_estab_df" not in st.session_state:
         st.session_state.cap_overrides_estab_df = pd.DataFrame({
-            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]"])),
-            "CAP":   pd.Series([], dtype="Int64"),
+            "FECHA": pd.Series(dtype="datetime64[ns]"),
+            "CAP":   pd.Series(dtype="Int64"),
         })
     st.session_state.cap_overrides_estab_df["FECHA"] = pd.to_datetime(
         st.session_state.cap_overrides_estab_df["FECHA"], errors="coerce"
