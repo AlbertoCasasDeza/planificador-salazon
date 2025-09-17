@@ -554,87 +554,96 @@ def planificar_filas_na(
                 asignado = True
                 break
 
-        # Si no se pudo asignar → generar sugerencias
+        # Si no se pudo asignar → generar sugerencias (tabla detallada por combinación)
         if not asignado:
             df_corr.at[idx, "LOTE_NO_ENCAJA"] = "Sí"
 
-            # Exploramos TODO el rango de fechas hábiles para construir recomendaciones
-            recomendaciones = []
+            sugerencias_rows_lote = []
             entrada = entrada_ini
+
             while (entrada - dia_recepcion).days <= dias_max_almacen:
                 if not es_habil(entrada):
                     entrada = siguiente_habil(entrada)
                     continue
 
-                # Chequeo de ENTRADA
                 for attempt in [1, 2]:
+                    # Déficit en ENTRADA
                     cap_ent_dia = get_cap_ent(entrada, attempt)
-                    exceso_ent = (carga_entrada.get(entrada, 0) + unds) - cap_ent_dia
-                    if exceso_ent <= 0:
-                        # ENTRADA no bloquea; miramos estabilización
-                        def_est = deficits_estab(dia_recepcion, entrada - pd.Timedelta(days=1), unds)
-                        if len(def_est) == 0:
-                            # Mirar SALIDA final
-                            salida = entrada + timedelta(days=dias_sal_optimos)
-                            if ajuste_finde:
-                                if salida.weekday() == 5:
-                                    salida = anterior_habil(salida)
-                                elif salida.weekday() == 6:
-                                    salida = siguiente_habil(salida)
-                            if ajuste_festivos and (salida.normalize() in dias_festivos):
-                                dia_semana = salida.weekday()
-                                if dia_semana == 0:
-                                    salida = siguiente_habil(salida)
-                                elif dia_semana in [1, 2, 3]:
-                                    anterior = anterior_habil(salida)
-                                    siguiente = siguiente_habil(salida)
-                                    carga_ant  = carga_salida.get(anterior, 0)
-                                    carga_sig  = carga_salida.get(siguiente, 0)
-                                    salida = anterior if carga_ant <= carga_sig else siguiente
-                                elif dia_semana == 4:
-                                    salida = anterior_habil(salida)
+                    deficit_ent = max(0, (carga_entrada.get(entrada, 0) + unds) - cap_ent_dia)
 
-                            cap_sal_dia = get_cap_sal(salida, attempt)
-                            exceso_sal = (carga_salida.get(salida, 0) + unds) - cap_sal_dia
-                            if exceso_sal <= 0:
-                                # Teóricamente factible (no deberíamos estar aquí), pero si llegamos,
-                                # lo proponemos igualmente.
-                                recomendaciones.append(
-                                    f"Probar ENTRADA {entrada.date()}: todo ok (sin cambios)."
-                                )
-                            else:
-                                recomendaciones.append(
-                                    f"Probar ENTRADA {entrada.date()}: ajustar SALIDA {salida.date()} (+{exceso_sal} unds sobre capacidad)."
-                                )
-                        else:
-                            # Hay déficit de estabilización: listar fechas clave (hasta 3)
-                            top = sorted(def_est.items(), key=lambda x: (x[0]))[:3]
-                            det = "; ".join([f"{k.date()} (+{v})" for k, v in top])
-                            recomendaciones.append(
-                                f"Probar ENTRADA {entrada.date()}: subir capacidad de estabilización en días [{det}]."
-                            )
-                    else:
-                        # Entrada es el bloqueo para este attempt
-                        recomendaciones.append(
-                            f"Probar ENTRADA {entrada.date()}: ampliar capacidad de ENTRADA (intento {attempt}) en +{exceso_ent} unds."
-                        )
+                    # Déficit en ESTABILIZACIÓN (máximo en el rango DIA..ENTRADA-1)
+                    def_est = deficits_estab(dia_recepcion, entrada - pd.Timedelta(days=1), unds)
+                    deficit_estab_max = max(def_est.values()) if def_est else 0
+
+                    # Calcular SALIDA propuesta (con ajustes finde/festivo)
+                    salida = entrada + timedelta(days=dias_sal_optimos)
+                    if ajuste_finde:
+                        if salida.weekday() == 5:
+                            salida = anterior_habil(salida)
+                        elif salida.weekday() == 6:
+                            salida = siguiente_habil(salida)
+                    if ajuste_festivos and (salida.normalize() in dias_festivos):
+                        dia_semana = salida.weekday()
+                        if dia_semana == 0:
+                            salida = siguiente_habil(salida)
+                        elif dia_semana in [1, 2, 3]:
+                            anterior = anterior_habil(salida)
+                            siguiente = siguiente_habil(salida)
+                            carga_ant = carga_salida.get(anterior, 0)
+                            carga_sig = carga_salida.get(siguiente, 0)
+                            salida = anterior if carga_ant <= carga_sig else siguiente
+                        elif dia_semana == 4:
+                            salida = anterior_habil(salida)
+
+                    # Déficit en SALIDA
+                    cap_sal_dia = get_cap_sal(salida, attempt)
+                    deficit_sal = max(0, (carga_salida.get(salida, 0) + unds) - cap_sal_dia)
+
+                    # Agregar fila de sugerencia para esta combinación
+                    sugerencias_rows_lote.append({
+                        "LOTE": lote_id,
+                        "PRODUCTO": prod,
+                        "UNDS": unds,
+                        "DIA_RECEPCION": pd.to_datetime(dia_recepcion).normalize(),
+                        "ENTRADA_PROPUESTA": pd.to_datetime(entrada).normalize(),
+                        "SALIDA_PROPUESTA": pd.to_datetime(salida).normalize(),
+                        "INTENTO": attempt,
+                        "DEFICIT_ENTRADA": int(deficit_ent),
+                        "DEFICIT_ESTAB_MAX": int(deficit_estab_max),
+                        "DEFICIT_SALIDA": int(deficit_sal),
+                        "MAX_DEFICIT": int(max(deficit_ent, deficit_estab_max, deficit_sal)),
+                        "TOTAL_DEFICIT": int(deficit_ent + deficit_estab_max + deficit_sal),
+                    })
 
                 entrada = siguiente_habil(entrada)
 
-            # Compactar recomendaciones (evitar duplicados)
-            recomendaciones = list(dict.fromkeys(recomendaciones))[:10]  # top 10 para no saturar
-            sugerencias_rows.append({
-                "LOTE": lote_id,
-                "PRODUCTO": prod,
-                "UNDS": unds,
-                "RECOMENDACION": " | ".join(recomendaciones) if recomendaciones else "No se encontraron alternativas dentro del rango permitido. Aumentar días máx. de almacenamiento."
-            })
+            # Priorizamos combinaciones factibles (MAX_DEFICIT=0), luego las de menor TOTAL_DEFICIT
+            if sugerencias_rows_lote:
+                # Orden: MAX_DEFICIT asc, TOTAL_DEFICIT asc, ENTRADA_PROPUESTA asc
+                sugerencias_rows_lote.sort(
+                    key=lambda r: (r["MAX_DEFICIT"], r["TOTAL_DEFICIT"], r["ENTRADA_PROPUESTA"])
+                )
+                # Limitar a un máximo por lote si quieres (por ejemplo 20):
+                sugerencias_rows.extend(sugerencias_rows_lote[:20])
 
     # Métrica final
     if "DIAS_SAL" in df_corr.columns and "DIAS_SAL_OPTIMOS" in df_corr.columns:
         df_corr["DIFERENCIA_DIAS_SAL"] = df_corr["DIAS_SAL"] - df_corr["DIAS_SAL_OPTIMOS"]
 
-    df_sugerencias = pd.DataFrame(sugerencias_rows, columns=["LOTE", "PRODUCTO", "UNDS", "RECOMENDACION"])
+    cols_sug = [
+        "LOTE", "PRODUCTO", "UNDS", "DIA_RECEPCION",
+        "ENTRADA_PROPUESTA", "SALIDA_PROPUESTA", "INTENTO",
+        "DEFICIT_ENTRADA", "DEFICIT_ESTAB_MAX", "DEFICIT_SALIDA",
+        "MAX_DEFICIT", "TOTAL_DEFICIT"
+    ]
+    df_sugerencias = pd.DataFrame(sugerencias_rows, columns=cols_sug) if sugerencias_rows else pd.DataFrame(columns=cols_sug)
+
+    if not df_sugerencias.empty:
+        df_sugerencias = df_sugerencias.sort_values(
+            by=["MAX_DEFICIT", "TOTAL_DEFICIT", "ENTRADA_PROPUESTA", "SALIDA_PROPUESTA", "LOTE"],
+            ascending=[True, True, True, True, True]
+        ).reset_index(drop=True)
+
     return df_corr, df_sugerencias
 
 # -------------------------------
@@ -1125,3 +1134,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
