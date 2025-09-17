@@ -597,7 +597,7 @@ if uploaded_file is not None:
 
     if "cap_overrides_ent_df" not in st.session_state:
         st.session_state.cap_overrides_ent_df = pd.DataFrame({
-            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]"])),
+            "FECHA": pd.to_datetime(pd.Series([], dtype="datetime64[ns]")),
             "CAP1":  pd.Series([], dtype="Int64"),
             "CAP2":  pd.Series([], dtype="Int64"),
         })
@@ -1004,3 +1004,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
