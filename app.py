@@ -607,6 +607,7 @@ def planificar_filas_na(
                         "DIA_RECEPCION": pd.to_datetime(dia_recepcion).normalize(),
                         "ENTRADA_PROPUESTA": pd.to_datetime(entrada).normalize(),
                         "SALIDA_PROPUESTA": pd.to_datetime(salida).normalize(),
+                        "INTENTO": attempt,
                         "DEFICIT_ENTRADA": int(deficit_ent),
                         "DEFICIT_ESTAB_MAX": int(deficit_estab_max),
                         "DEFICIT_SALIDA": int(deficit_sal),
@@ -1133,5 +1134,3 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-
