@@ -538,6 +538,42 @@ def planificar_filas_na(
     return df_corr   # si tu versión devuelve dos cosas, ajusta aquí
 
 # -------------------------------
+# 🔧 Normalizador de dtypes para el editor (clave para evitar el error)
+# -------------------------------
+def _sanitize_for_editor(df_in: pd.DataFrame) -> pd.DataFrame:
+    df = df_in.copy()
+
+    # 1) Fechas
+    for c in ["DIA", "ENTRADA_SAL", "SALIDA_SAL"]:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+
+    # 2) Numéricos (entero nullable)
+    int_cols = ["UNDS", "DIAS_SAL", "DIAS_SAL_OPTIMOS", "DIAS_ALMACENADOS", "DIFERENCIA_DIAS_SAL"]
+    for c in int_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int64")
+
+    # 3) Texto/flags
+    if "LOTE_NO_ENCAJA" in df.columns:
+        # Unificar a 'Sí'/'No' o <NA>
+        df["LOTE_NO_ENCAJA"] = (
+            df["LOTE_NO_ENCAJA"]
+            .replace({True: "Sí", False: "No", "SI": "Sí", "si": "Sí", "NO": "No", "no": "No"})
+            .astype("string")
+        )
+
+    # 4) Evitar columnas "object" con mezclas numéricas: si parecen numéricas, convierto
+    for c in df.columns:
+        if pd.api.types.is_object_dtype(df[c]):
+            # intento pasar a numérico si >70% son conversibles
+            coerced = pd.to_numeric(df[c], errors="coerce")
+            if coerced.notna().mean() > 0.7:
+                df[c] = coerced.astype("Int64")
+
+    return df
+
+# -------------------------------
 # Ejecución de la app
 # -------------------------------
 if uploaded_file is not None:
@@ -555,7 +591,7 @@ if uploaded_file is not None:
         if a in df.columns and target not in df.columns:
             df.rename(columns={a: target}, inplace=True)
 
-    # Normaliza tipos
+    # Normaliza tipos base
     for col in ["DIA", "ENTRADA_SAL", "SALIDA_SAL"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
@@ -708,7 +744,7 @@ if uploaded_file is not None:
     st.session_state.cap_overrides_estab_df = cap_overrides_estab_df
 
     # ===============================
-    # 🔧 Planificación incremental
+    # 🔧 Modo de planificación
     # ===============================
     st.markdown("### ⚙️ Modo de planificación")
     usar_plan_actual = st.toggle(
@@ -779,7 +815,8 @@ if uploaded_file is not None:
     # Mostrar tabla editable, gráfico y estabilización (fuera del botón)
     # ===============================
     if "df_planificado" in st.session_state:
-        df_show = st.session_state["df_planificado"]
+        # --- Sanear dtypes ANTES del editor ---
+        df_show = _sanitize_for_editor(st.session_state["df_planificado"])
 
         # 🧪 Diagnóstico opcional
         with st.expander("🧪 Diagnóstico dtypes", expanded=False):
@@ -799,12 +836,17 @@ if uploaded_file is not None:
             except Exception:
                 column_config[col] = st.column_config.TextColumn(col)
 
-        df_editable = st.data_editor(
-            df_show,
-            column_config=column_config,
-            num_rows="dynamic",
-            use_container_width=True
-        )
+        try:
+            df_editable = st.data_editor(
+                df_show,
+                column_config=column_config,
+                num_rows="dynamic",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error("No se pudo renderizar el editor por tipos incompatibles. He mostrado los dtypes arriba para depurar. "
+                     "Revisa si alguna columna mezcla números y texto o fechas como texto.")
+            st.stop()
 
         # -------------------------------
         # Gráfico: Entradas vs Salidas por lote/fecha
