@@ -743,73 +743,84 @@ if uploaded_file is not None:
                 estab_cap_overrides[r["FECHA"]] = int(r["CAP"])
     st.session_state.cap_overrides_estab_df = cap_overrides_estab_df
 
-    # ===============================
-    # 🔧 Modo de planificación
-    # ===============================
-    st.markdown("### ⚙️ Modo de planificación")
-    usar_plan_actual = st.toggle(
-        "Usar planificación actual como base (no tocar lo ya planificado)",
-        value=True,
-        help="Si está activo, se parte de la planificación guardada en la sesión. Solo se intentan los lotes seleccionados (por defecto, los que no encajan o están sin ENTRADA)."
+# ===============================
+# 🔧 Planificación incremental
+# ===============================
+st.markdown("### ⚙️ Modo de planificación")
+usar_plan_actual = st.toggle(
+    "Usar planificación actual como base (no tocar lo ya planificado)",
+    value=True,
+    help="Si está activo, se parte de la planificación guardada en la sesión. Solo se intentan los lotes seleccionados (por defecto, los que no encajan o están sin ENTRADA)."
+)
+
+# Determina el DataFrame base (plantilla subida o el plan guardado)
+if usar_plan_actual and ("df_planificado" in st.session_state):
+    df_base = st.session_state["df_planificado"].copy()
+else:
+    df_base = df.copy()
+
+# Detecta candidatos por defecto: sin ENTRADA o marcados como no encajan
+candidatos_mask = df_base["ENTRADA_SAL"].isna()
+if "LOTE_NO_ENCAJA" in df_base.columns:
+    candidatos_mask = candidatos_mask | (df_base["LOTE_NO_ENCAJA"].astype(str).str.upper() == "SÍ")
+
+candidatos_df = df_base[candidatos_mask].copy()
+
+# Selector de lotes a replanificar (por defecto, todos los candidatos detectados)
+lotes_candidatos = (
+    candidatos_df["LOTE"].astype(str).tolist()
+    if "LOTE" in candidatos_df.columns
+    else candidatos_df.index.astype(str).tolist()
+)
+lotes_select = st.multiselect(
+    "Elige qué lotes quieres replanificar (solo estos se modificarán):",
+    options=lotes_candidatos,
+    default=lotes_candidatos,
+    help="Por defecto se incluyen los lotes sin ENTRADA o con LOTE_NO_ENCAJA='Sí'."
+)
+
+# Convierte selección a índice real del DF
+if "LOTE" in df_base.columns:
+    idx_a_replan = df_base[df_base["LOTE"].astype(str).isin(lotes_select)].index
+else:
+    idx_a_replan = df_base.index[df_base.index.astype(str).isin(lotes_select)]
+
+# Prepara DF de trabajo: solo cambiaremos las filas seleccionadas
+df_trabajo = df_base.copy()
+
+# 🔒 Liberamos SOLO las filas seleccionadas, preservando dtypes (evita errores en data_editor)
+datetime_cols = [c for c in ["ENTRADA_SAL", "SALIDA_SAL"] if c in df_trabajo.columns]
+numeric_cols  = [c for c in ["DIAS_SAL", "DIAS_ALMACENADOS", "DIFERENCIA_DIAS_SAL"] if c in df_trabajo.columns]
+text_cols     = [c for c in ["LOTE_NO_ENCAJA"] if c in df_trabajo.columns]
+
+if datetime_cols:
+    df_trabajo.loc[idx_a_replan, datetime_cols] = pd.NaT
+for c in numeric_cols:
+    df_trabajo.loc[idx_a_replan, c] = pd.NA
+for c in text_cols:
+    df_trabajo.loc[idx_a_replan, c] = pd.NA
+
+# Reafirma tipos tras liberar
+for c in datetime_cols:
+    df_trabajo[c] = pd.to_datetime(df_trabajo[c], errors="coerce")
+for c in numeric_cols:
+    df_trabajo[c] = pd.to_numeric(df_trabajo[c], errors="coerce").astype("Int64")
+
+# Botón de planificación incremental
+if st.button("🚀 Aplicar planificación (solo lotes seleccionados)"):
+    result = planificar_filas_na(
+        df_trabajo, dias_max_almacen_global, dias_max_por_producto,
+        estab_cap, cap_overrides_ent, cap_overrides_sal, estab_cap_overrides
     )
-
-    if usar_plan_actual and ("df_planificado" in st.session_state):
-        df_base = st.session_state["df_planificado"].copy()
+    # Soporta ambas firmas: que devuelva solo df o (df, sugerencias)
+    if isinstance(result, tuple) and len(result) == 2:
+        df_planificado, df_sugerencias = result
     else:
-        df_base = df.copy()
+        df_planificado, df_sugerencias = result, pd.DataFrame()
 
-    candidatos_mask = df_base["ENTRADA_SAL"].isna()
-    if "LOTE_NO_ENCAJA" in df_base.columns:
-        candidatos_mask = candidatos_mask | (df_base["LOTE_NO_ENCAJA"].astype(str).str.upper() == "SÍ")
-
-    candidatos_df = df_base[candidatos_mask].copy()
-
-    lotes_candidatos = candidatos_df["LOTE"].astype(str).tolist() if "LOTE" in candidatos_df.columns else candidatos_df.index.astype(str).tolist()
-    lotes_select = st.multiselect(
-        "Elige qué lotes quieres replanificar (solo estos se modificarán):",
-        options=lotes_candidatos,
-        default=lotes_candidatos,
-        help="Por defecto se incluyen los lotes sin ENTRADA o con LOTE_NO_ENCAJA='Sí'."
-    )
-
-    if "LOTE" in df_base.columns:
-        idx_a_replan = df_base[df_base["LOTE"].astype(str).isin(lotes_select)].index
-    else:
-        idx_a_replan = df_base.index[df_base.index.astype(str).isin(lotes_select)]
-
-    df_trabajo = df_base.copy()
-
-    # 🔴 Corrección: liberar filas preservando tipos (evita error de data_editor)
-    datetime_cols = [c for c in ["ENTRADA_SAL", "SALIDA_SAL"] if c in df_trabajo.columns]
-    numeric_cols  = [c for c in ["DIAS_SAL", "DIAS_ALMACENADOS", "DIFERENCIA_DIAS_SAL"] if c in df_trabajo.columns]
-    text_cols     = [c for c in ["LOTE_NO_ENCAJA"] if c in df_trabajo.columns]
-
-    if datetime_cols:
-        df_trabajo.loc[idx_a_replan, datetime_cols] = pd.NaT
-    for c in numeric_cols:
-        df_trabajo.loc[idx_a_replan, c] = pd.NA
-    for c in text_cols:
-        df_trabajo.loc[idx_a_replan, c] = pd.NA
-
-    for c in datetime_cols:
-        df_trabajo[c] = pd.to_datetime(df_trabajo[c], errors="coerce")
-    for c in numeric_cols:
-        df_trabajo[c] = pd.to_numeric(df_trabajo[c], errors="coerce").astype("Int64")
-
-    # Botón de planificación incremental
-    if st.button("🚀 Aplicar planificación (solo lotes seleccionados)"):
-        result = planificar_filas_na(
-            df_trabajo, dias_max_almacen_global, dias_max_por_producto,
-            estab_cap, cap_overrides_ent, cap_overrides_sal, estab_cap_overrides
-        )
-        if isinstance(result, tuple) and len(result) == 2:
-            df_planificado, df_sugerencias = result
-        else:
-            df_planificado, df_sugerencias = result, pd.DataFrame()
-
-        st.session_state["df_planificado"] = df_planificado
-        st.session_state["df_sugerencias"] = df_sugerencias
-        st.success(f"✅ Replanificación aplicada a {len(idx_a_replan)} lote(s). El resto no se ha modificado.")
+    st.session_state["df_planificado"] = df_planificado
+    st.session_state["df_sugerencias"] = df_sugerencias
+    st.success(f"✅ Replanificación aplicada a {len(idx_a_replan)} lote(s). El resto no se ha modificado.")
 
     # ===============================
     # Mostrar tabla editable, gráfico y estabilización (fuera del botón)
@@ -1045,3 +1056,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
