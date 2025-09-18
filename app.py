@@ -918,6 +918,17 @@ if uploaded_file is not None:
             num_rows="dynamic",
             use_container_width=True
         )
+        # 🔴 Añadir columna de indicador para lotes que no encajan
+        if "LOTE_NO_ENCAJA" in df_editable.columns:
+            # Crea una columna con ❌ si el lote no encaja
+            df_editable["🚨"] = df_editable["LOTE_NO_ENCAJA"].astype(str).str.strip().str.upper().isin(["SÍ", "SI"]).map({True: "❌", False: ""})
+
+            # Opcional: reordena columnas para mostrar 🚨 al principio
+            cols = ["🚨"] + [c for c in df_editable.columns if c != "🚨"]
+            df_editable = df_editable[cols]
+
+            # Opcional: ajusta la configuración de la columna para que ocupe poco espacio
+            column_config["🚨"] = st.column_config.TextColumn("🚨", width="small", help="No encaja")
 
         # -------------------------------
         # Gráfico: Entradas vs Salidas por lote/fecha
@@ -1143,6 +1154,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
