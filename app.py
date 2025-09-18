@@ -606,7 +606,7 @@ def planificar_filas_na(
                             f"Subir SALIDA el {salida.normalize().date()} en +{int(deficit_sal)} unds (INTENTO {attempt})."
                         )
                     if deficit_estab_max > 0:
-                        dias_estab = [f\"{k.date()}(+{v})\" for k, v in list(def_est.items())[:3] if v > 0]
+                        dias_estab = [f"{k.date()}(+{v})" for k, v in list(def_est.items())[:3] if v > 0]
                         if dias_estab:
                             recomendaciones.append(\"Subir ESTABILIZACIÓN en: \" + \", \".join(dias_estab))
 
@@ -1142,4 +1142,5 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
