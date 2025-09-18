@@ -554,7 +554,7 @@ def planificar_filas_na(
                 asignado = True
                 break
 
-        # Si no se pudo asignar → generar sugerencias (tabla detallada por combinación)
+        # Si no se pudo asignar → generar sugerencias (tabla detallada por combinación + texto rápido)
         if not asignado:
             df_corr.at[idx, "LOTE_NO_ENCAJA"] = "Sí"
 
@@ -567,15 +567,12 @@ def planificar_filas_na(
                     continue
 
                 for attempt in [1, 2]:
-                    # Déficit en ENTRADA
                     cap_ent_dia = get_cap_ent(entrada, attempt)
                     deficit_ent = max(0, (carga_entrada.get(entrada, 0) + unds) - cap_ent_dia)
 
-                    # Déficit en ESTABILIZACIÓN (máximo en el rango DIA..ENTRADA-1)
                     def_est = deficits_estab(dia_recepcion, entrada - pd.Timedelta(days=1), unds)
                     deficit_estab_max = max(def_est.values()) if def_est else 0
 
-                    # Calcular SALIDA propuesta (con ajustes finde/festivo)
                     salida = entrada + timedelta(days=dias_sal_optimos)
                     if ajuste_finde:
                         if salida.weekday() == 5:
@@ -595,11 +592,24 @@ def planificar_filas_na(
                         elif dia_semana == 4:
                             salida = anterior_habil(salida)
 
-                    # Déficit en SALIDA
                     cap_sal_dia = get_cap_sal(salida, attempt)
                     deficit_sal = max(0, (carga_salida.get(salida, 0) + unds) - cap_sal_dia)
 
-                    # Agregar fila de sugerencia para esta combinación
+                    # Generar texto de recomendación rápida
+                    recomendaciones = []
+                    if deficit_ent > 0:
+                        recomendaciones.append(
+                            f"Subir ENTRADA el {entrada.normalize().date()} en +{int(deficit_ent)} unds (INTENTO {attempt})."
+                        )
+                    if deficit_sal > 0:
+                        recomendaciones.append(
+                            f"Subir SALIDA el {salida.normalize().date()} en +{int(deficit_sal)} unds (INTENTO {attempt})."
+                        )
+                    if deficit_estab_max > 0:
+                        dias_estab = [f\"{k.date()}(+{v})\" for k, v in list(def_est.items())[:3] if v > 0]
+                        if dias_estab:
+                            recomendaciones.append(\"Subir ESTABILIZACIÓN en: \" + \", \".join(dias_estab))
+
                     sugerencias_rows_lote.append({
                         "LOTE": lote_id,
                         "PRODUCTO": prod,
@@ -613,17 +623,15 @@ def planificar_filas_na(
                         "DEFICIT_SALIDA": int(deficit_sal),
                         "MAX_DEFICIT": int(max(deficit_ent, deficit_estab_max, deficit_sal)),
                         "TOTAL_DEFICIT": int(deficit_ent + deficit_estab_max + deficit_sal),
+                        "RECOMENDACION": " | ".join(recomendaciones) if recomendaciones else "Sin ajustes necesarios"
                     })
 
                 entrada = siguiente_habil(entrada)
 
-            # Priorizamos combinaciones factibles (MAX_DEFICIT=0), luego las de menor TOTAL_DEFICIT
             if sugerencias_rows_lote:
-                # Orden: MAX_DEFICIT asc, TOTAL_DEFICIT asc, ENTRADA_PROPUESTA asc
                 sugerencias_rows_lote.sort(
                     key=lambda r: (r["MAX_DEFICIT"], r["TOTAL_DEFICIT"], r["ENTRADA_PROPUESTA"])
                 )
-                # Limitar a un máximo por lote si quieres (por ejemplo 20):
                 sugerencias_rows.extend(sugerencias_rows_lote[:20])
 
     # Métrica final
@@ -634,7 +642,7 @@ def planificar_filas_na(
         "LOTE", "PRODUCTO", "UNDS", "DIA_RECEPCION",
         "ENTRADA_PROPUESTA", "SALIDA_PROPUESTA", "INTENTO",
         "DEFICIT_ENTRADA", "DEFICIT_ESTAB_MAX", "DEFICIT_SALIDA",
-        "MAX_DEFICIT", "TOTAL_DEFICIT"
+        "MAX_DEFICIT", "TOTAL_DEFICIT","RECOMENDACION"
     ]
     df_sugerencias = pd.DataFrame(sugerencias_rows, columns=cols_sug) if sugerencias_rows else pd.DataFrame(columns=cols_sug)
 
@@ -1134,3 +1142,4 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
