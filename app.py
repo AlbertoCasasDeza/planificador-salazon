@@ -912,23 +912,36 @@ if uploaded_file is not None:
             except Exception:
                 column_config[col] = st.column_config.TextColumn(col)
 
+        # 🔴 Preparar DF para el editor con indicador 🚨
+        df_for_editor = df_show.copy()
+        column_config2 = dict(column_config)
+
+        if "LOTE_NO_ENCAJA" in df_for_editor.columns:
+            # Normaliza "Sí"/"Si"/"SÍ"/"SI" → SI (sin problemas con acentos)
+            valnorm = (
+                df_for_editor["LOTE_NO_ENCAJA"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .str.replace("Í", "I", regex=False)
+            )
+            df_for_editor["🚨"] = valnorm.isin(["SI"]).map({True: "❌", False: ""})
+
+            # Coloca 🚨 como primera columna
+            cols = ["🚨"] + [c for c in df_for_editor.columns if c != "🚨"]
+            df_for_editor = df_for_editor[cols]
+
+            # Configura la columna 🚨 para que ocupe poco
+            column_config2["🚨"] = st.column_config.TextColumn("🚨", width="small", help="No encaja")
+
+        # 🖊️ Render del editor usando el DF preparado
         df_editable = st.data_editor(
-            df_show,
-            column_config=column_config,
+            df_for_editor,
+            column_config=column_config2,
             num_rows="dynamic",
-            use_container_width=True
+            use_container_width=True,
+            key="plan_editor"  # clave para que Streamlit rerenderice correctamente
         )
-        # 🔴 Añadir columna de indicador para lotes que no encajan
-        if "LOTE_NO_ENCAJA" in df_editable.columns:
-            # Crea una columna con ❌ si el lote no encaja
-            df_editable["🚨"] = df_editable["LOTE_NO_ENCAJA"].astype(str).str.strip().str.upper().isin(["SÍ", "SI"]).map({True: "❌", False: ""})
-
-            # Opcional: reordena columnas para mostrar 🚨 al principio
-            cols = ["🚨"] + [c for c in df_editable.columns if c != "🚨"]
-            df_editable = df_editable[cols]
-
-            # Opcional: ajusta la configuración de la columna para que ocupe poco espacio
-            column_config["🚨"] = st.column_config.TextColumn("🚨", width="small", help="No encaja")
 
         # -------------------------------
         # Gráfico: Entradas vs Salidas por lote/fecha
@@ -1154,6 +1167,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
