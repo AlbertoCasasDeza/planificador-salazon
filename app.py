@@ -247,12 +247,11 @@ def planificar_filas_na(
                 deficits[d0] = int(falta)
         return deficits
 
-    # ============================================================
     # REGLAS ESPECIALES DE ENTRADA COMÚN
-    # - Grupo A (único): ["JBSPRCLC-MEX"]  -> todos ese código al mismo día
-    # - Grupo B (conjunto): ["JCIVRPORCISAN", "PCIVRPORCISAN"] -> MISMO día para ambos
-    #   Si no cabe conjuntamente, cae a intentar cada código por separado.
-    # ============================================================
+    # - Grupos unitarios (mismo día por código):
+    #   ["JBSPRCLC-MEX"], ["JCIVRROD-MEX"], ["JBCPRCLC-MEX"]
+    # - Grupo conjunto (mismo día entre ambos, con fallback por separado):
+    #   ["JCIVRPORCISAN", "PCIVRPORCISAN"]
     def _aplicar_entrada_comun_para_grupo(codigos, marcar_si_falla=False):
         if "PRODUCTO" not in df_corr.columns:
             return False
@@ -407,12 +406,18 @@ def planificar_filas_na(
         return False
 
     # Ejecutar reglas especiales
+    # - Grupos unitarios (cada código: todas sus filas al MISMO día de ENTRADA)
     _aplicar_entrada_comun_para_grupo(["JBSPRCLC-MEX"], marcar_si_falla=False)
-    exito_conjunto = _aplicar_entrada_comun_para_grupo(["JCIVRPORCISAN", "PCIVRPORCISAN"], marcar_si_falla=False)
+    _aplicar_entrada_comun_para_grupo(["JCIVRROD-MEX"], marcar_si_falla=False)
+    _aplicar_entrada_comun_para_grupo(["JBCPRCLC-MEX"], marcar_si_falla=False)
+
+    # - Grupo conjunto (dos códigos al MISMO día entre sí). Si no cabe, fallback por separado.
+    exito_conjunto = _aplicar_entrada_comun_para_grupo(
+        ["JCIVRPORCISAN", "PCIVRPORCISAN"], marcar_si_falla=False
+    )
     if not exito_conjunto:
         _aplicar_entrada_comun_para_grupo(["JCIVRPORCISAN"], marcar_si_falla=False)
         _aplicar_entrada_comun_para_grupo(["PCIVRPORCISAN"], marcar_si_falla=False)
-
     # ===============================
     # Asignación de pendientes minimizando cambios de TIPO/NITRIF por día
     # ===============================
@@ -1167,6 +1172,7 @@ if uploaded_file is not None:
             file_name="planificacion_lotes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 
 
